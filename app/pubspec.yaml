@@ -1,0 +1,36 @@
+name: inkbox
+description: "墨匣 (InkBox) — 本地书籍与漫画阅读器（Android 首发，面向五端架构）"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.14.0
+
+dependencies:
+  flutter:
+    sdk: flutter
+  material_ui: ^1.1.0
+  flutter_riverpod: ^2.6.1
+  go_router: ^14.6.0
+  flutter_svg: ^2.0.16
+  drift: ^2.24.0
+  sqlite3_flutter_libs: ^0.5.30
+  path_provider: ^2.1.5
+  path: ^1.9.1
+  ffi: ^2.1.3
+  dynamic_color: ^1.7.0
+  shared_preferences: ^2.5.2
+  crypto: ^3.0.6
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  drift_dev: ^2.24.0
+  build_runner: ^2.4.14
+  sqlite3: ^2.7.5
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/txt_toc_rules.json

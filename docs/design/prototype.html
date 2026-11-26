@@ -1,0 +1,1171 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>墨匣 InkBox v0.2 — FloatingCard & 手绘图标交互原型</title>
+  <script src="https://www.gstatic.com/antigravity/web/dev/tailwindcss.min.js"></script>
+  <style>
+    .phone-light {
+      --p-bg: #F3EFE8;
+      --p-surface: #FFFFFF;
+      --p-surface-glass: rgba(255, 255, 255, 0.90);
+      --p-surface-2: #EAE4DA;
+      --p-border: rgba(42, 38, 34, 0.09);
+      --p-fg: #22201E;
+      --p-muted: #6C665E;
+      --p-accent: #3B5978;
+      --p-accent-soft: #E0EAF4;
+      --p-accent-fg: #FFFFFF;
+      --p-warm: #B86B4B;
+      --p-ok: #2E7D5B;
+      --p-shadow: 0 10px 26px -10px rgba(34, 29, 22, 0.16), 0 2px 6px -2px rgba(34, 29, 22, 0.07);
+      --p-shadow-sm: 0 6px 16px -8px rgba(34, 29, 22, 0.14), 0 1px 4px -1px rgba(34, 29, 22, 0.06);
+    }
+    .phone-dark {
+      --p-bg: #101114;
+      --p-surface: #1A1C21;
+      --p-surface-glass: rgba(26, 28, 33, 0.90);
+      --p-surface-2: #24272F;
+      --p-border: rgba(255, 255, 255, 0.08);
+      --p-fg: #EAE8E3;
+      --p-muted: #989690;
+      --p-accent: #82A9D4;
+      --p-accent-soft: #243344;
+      --p-accent-fg: #0D1620;
+      --p-warm: #D88B6A;
+      --p-ok: #55B388;
+      --p-shadow: 0 14px 32px -10px rgba(0, 0, 0, 0.65), 0 2px 8px -2px rgba(0, 0, 0, 0.4);
+      --p-shadow-sm: 0 8px 18px -8px rgba(0, 0, 0, 0.52);
+    }
+    .hide-scrollbar::-webkit-scrollbar { display: none; }
+    .hide-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    .phone-bezel {
+      box-shadow: 0 28px 64px -18px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255,255,255,0.08) inset;
+    }
+    .serif-book {
+      font-family: "Songti SC", "Noto Serif SC", "Source Han Serif SC", "STSong", Georgia, serif;
+    }
+    .floating-card {
+      background: var(--p-surface);
+      border: 1px solid var(--p-border);
+      box-shadow: var(--p-shadow-sm);
+    }
+    .floating-dock {
+      background: var(--p-surface-glass);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 1px solid var(--p-border);
+      box-shadow: var(--p-shadow);
+    }
+    .sketch-icon {
+      display: inline-block;
+      vertical-align: middle;
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 1.65;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }
+    .manga-panel {
+      background-image: radial-gradient(rgba(0,0,0,0.09) 1px, transparent 0);
+      background-size: 6px 6px;
+    }
+    @keyframes floatIn {
+      from { transform: translateY(14px) scale(0.98); opacity: 0; }
+      to { transform: translateY(0) scale(1); opacity: 1; }
+    }
+    .animate-float { animation: floatIn 0.2s cubic-bezier(0.2, 0.85, 0.25, 1); }
+    @keyframes fadeIn {
+      from { opacity: 0; }
+      to { opacity: 1; }
+    }
+    .animate-fade { animation: fadeIn 0.16s ease-out; }
+    @keyframes spinSlow {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .spin-anim { animation: spinSlow 0.9s linear infinite; }
+  </style>
+</head>
+<body class="bg-[var(--background)] text-[var(--foreground)] antialiased m-0 p-0">
+  <div class="max-w-6xl mx-auto px-4 py-6">
+    <!-- Header -->
+    <header class="flex flex-wrap items-center justify-between gap-4 pb-5 mb-6 border-b border-[var(--border)]">
+      <div>
+        <div class="flex items-center gap-2.5">
+          <span class="inline-flex items-center justify-center w-8 h-8 rounded-xl border border-[var(--border)] bg-[var(--card)] font-bold text-sm serif-book">墨</span>
+          <h1 class="text-lg font-semibold tracking-tight">墨匣 (InkBox) · FloatingCard & 手绘单色图标原型</h1>
+          <span class="px-2 py-0.5 text-xs rounded-full bg-[var(--card)] border border-[var(--border)] text-[var(--muted-foreground)]">v0.2 修订版</span>
+        </div>
+        <p class="text-xs text-[var(--muted-foreground)] mt-1.5">
+          已升级为 FloatingCard 悬浮卡片风格 + 100% 定制手绘细线单色 SVG 图标 · 包含 V1.0 全量功能体验
+        </p>
+      </div>
+      <div class="flex flex-wrap items-center gap-2">
+        <button onclick="toggleUiStyle()" id="btn-style"
+          class="px-3 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] transition cursor-pointer font-medium">
+          样式：FloatingCard 悬浮
+        </button>
+        <button onclick="togglePhoneTheme()" id="btn-theme"
+          class="px-3 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] transition flex items-center gap-1.5 cursor-pointer">
+          <span id="theme-dot" class="w-2 h-2 rounded-full bg-amber-500"></span>
+          <span id="theme-label">暖纸日间</span>
+        </button>
+        <button onclick="jumpScreen('bookshelf')" class="px-2.5 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] cursor-pointer">书架</button>
+        <button onclick="jumpScreen('manga')" class="px-2.5 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] cursor-pointer">漫画架</button>
+        <button onclick="openBookReader(0)" class="px-2.5 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] cursor-pointer">书籍阅读器</button>
+        <button onclick="openMangaReader(0)" class="px-2.5 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] cursor-pointer">漫画阅读器</button>
+        <button onclick="jumpScreen('import')" class="px-2.5 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] cursor-pointer">导入</button>
+        <button onclick="jumpScreen('webdav')" class="px-2.5 py-1.5 text-xs rounded-lg bg-[var(--card)] border border-[var(--border)] hover:border-[var(--primary)] cursor-pointer">WebDAV</button>
+      </div>
+    </header>
+
+    <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+      <!-- Simulated Android Flagship -->
+      <div class="lg:col-span-5 flex justify-center">
+        <div class="phone-bezel relative w-[372px] h-[770px] rounded-[42px] bg-[#16171A] p-[11px] select-none shrink-0">
+          <div class="absolute -right-[3px] top-32 w-[3px] h-14 bg-[#2C2E33] rounded-r"></div>
+          <div class="absolute -right-[3px] top-52 w-[3px] h-10 bg-[#2C2E33] rounded-r"></div>
+
+          <div id="phone-screen" class="phone-light relative w-full h-full rounded-[32px] overflow-hidden flex flex-col transition-colors duration-200"
+               style="background: var(--p-bg); color: var(--p-fg);">
+            <!-- Status Bar -->
+            <div id="status-bar" class="h-8 px-6 pt-1.5 flex items-center justify-between text-[11px] font-medium shrink-0 z-30">
+              <span>10:24</span>
+              <div class="w-4 h-4 rounded-full bg-[#111] border border-white/10"></div>
+              <div class="flex items-center gap-1.5 text-[10px]">
+                <span>5G</span>
+                <span>Wi-Fi</span>
+                <span class="px-1 border border-current rounded text-[9px] leading-tight">86%</span>
+              </div>
+            </div>
+
+            <!-- Viewport -->
+            <div id="screen-content" class="flex-1 relative overflow-hidden flex flex-col"></div>
+
+            <!-- Bottom Navigation (adapts between FloatingCard Pill Dock & Classic MD3 Bar) -->
+            <div id="bottom-nav-wrap" class="z-30 shrink-0"></div>
+
+            <!-- Gesture Bar -->
+            <div id="gesture-bar" class="h-4 flex items-center justify-center shrink-0 z-30">
+              <div class="w-28 h-1 rounded-full opacity-25 bg-current"></div>
+            </div>
+
+            <!-- Toast -->
+            <div id="phone-toast" class="hidden absolute bottom-24 left-1/2 -translate-x-1/2 px-3.5 py-2 rounded-full text-xs font-medium bg-[#1C1B1F] text-white shadow-xl z-50 whitespace-nowrap animate-fade"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right Column: Spec & Hand-Drawn Icon Gallery -->
+      <div class="lg:col-span-7 space-y-4">
+        <div class="rounded-xl bg-[var(--card)] border border-[var(--border)] p-5">
+          <div class="flex items-center justify-between gap-2 mb-3">
+            <div>
+              <span class="inline-block px-2 py-0.5 rounded text-xs font-medium bg-[var(--secondary)] text-[var(--secondary-foreground)] mb-1">当前交互说明</span>
+              <h2 id="spec-title" class="text-base font-semibold">书架 · FloatingCard 悬浮布局</h2>
+            </div>
+            <span id="spec-ref" class="text-xs text-[var(--muted-foreground)]">FloatingCard + 手绘单色线性图标</span>
+          </div>
+          <p id="spec-desc" class="text-xs leading-relaxed text-[var(--muted-foreground)] mb-3"></p>
+          <ul id="spec-tips" class="text-xs text-[var(--muted-foreground)] space-y-1.5 list-disc pl-4"></ul>
+        </div>
+
+        <!-- Hand-Drawn Monochrome Icon Set Showcase -->
+        <div class="rounded-xl bg-[var(--card)] border border-[var(--border)] p-5">
+          <div class="flex items-center justify-between mb-3">
+            <h3 class="text-sm font-semibold">定制手绘单色线性图标集（Ink Sketch Icons）</h3>
+            <span class="text-xs text-[var(--muted-foreground)]">1.65px 手绘钢笔描边 · 零全彩/零 Emoji</span>
+          </div>
+          <div id="icon-showcase" class="grid grid-cols-4 sm:grid-cols-8 gap-2.5 text-center"></div>
+        </div>
+
+        <!-- FloatingCard Rules -->
+        <div class="rounded-xl bg-[var(--card)] border border-[var(--border)] p-5">
+          <h3 class="text-sm font-semibold mb-3">FloatingCard 悬浮卡片设计规范（V1.0 生效）</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+            <div class="p-3 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+              <div class="font-medium mb-1">悬浮导航与顶栏</div>
+              <div class="text-[var(--muted-foreground)] leading-relaxed">底栏采用离边 12dp 的悬浮毛玻璃胶囊（Floating Dock），顶栏采用轻投影浮岛卡片，释放完整纸面纵深感。</div>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+              <div class="font-medium mb-1">悬浮书籍/漫画卡片</div>
+              <div class="text-[var(--muted-foreground)] leading-relaxed">每本作品独立承载于 18dp 圆角柔和投影卡片中，支持「FloatingCard 卡片态」与「经典紧凑网格」一键切换。</div>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+              <div class="font-medium mb-1">阅读器四边离缝浮卡</div>
+              <div class="text-[var(--muted-foreground)] leading-relaxed">书籍/漫画控制层告别生硬通栏底板，改用四周 12dp 留白、24dp 全圆角毛玻璃悬浮面板，轻盈不压画面。</div>
+            </div>
+            <div class="p-3 rounded-lg bg-[var(--background)] border border-[var(--border)]">
+              <div class="font-medium mb-1">手绘钢笔单色图标体系</div>
+              <div class="text-[var(--muted-foreground)] leading-relaxed">所有功能图标采用手绘微颤笔触单色矢量 SVG，随日/夜/Monet 主题自动着墨，与温暖纸感高度统一。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // --- Bespoke Hand-Drawn Monochrome Ink SVG Icons (Zero Emoji / Zero Multi-Color) ---
+    function ico(name, size = 18, extraClass = '') {
+      const paths = {
+        bookshelf: `<path d="M4.2 5.4c2.4-.7 5.2-.3 7.6 1.2 2.4-1.5 5.3-1.8 7.8-1.1-.1 4.2.1 8.5-.2 12.6-2.5-.6-5.2-.3-7.6 1.1-2.5-1.4-5.2-1.7-7.5-1.1.2-4.1-.2-8.4-.1-12.7Z"/><path d="M11.8 6.6c.1 4.1-.1 8.4 0 12.6"/><path d="M6.8 9.2c1.1-.2 2.1-.1 3 .2"/><path d="M14.3 9.4c1-.3 2.1-.4 3.1-.2"/>`,
+        manga: `<path d="M4.5 5.2c4.8-.4 10.1-.2 14.9.1.4 3.8.2 7.8-.1 11.4-2.8.2-5.7.1-8.4.2l-3.8 2.9.6-3c-1.1-.1-2.2-.1-3.2-.2-.3-3.7-.2-7.6 0-11.4Z"/><path d="M7.8 9.1c1.4-.1 3.1-.1 4.6.1"/><path d="M7.9 12.5c2.2.1 5.1-.1 7.3-.1"/><path d="M15.4 8.2l1.2 1.8"/>`,
+        import: `<path d="M12.1 3.8c-.1 3.5.1 7.1 0 10.6"/><path d="M8.6 11.2c1.2 1.2 2.3 2.5 3.5 3.6 1.2-1.2 2.4-2.4 3.5-3.7"/><path d="M4.6 14.8c-.1 1.7.1 3.5.3 4.8 4.6.3 9.6.2 14.2-.1.2-1.4.3-3.1.2-4.7"/>`,
+        sync: `<path d="M6.8 16.8c-2.2-.2-3.7-1.8-3.6-3.9.1-1.9 1.5-3.3 3.4-3.6.7-2.6 3.1-4.3 5.8-4.1 2.5.2 4.5 2 4.9 4.4 1.8.4 3.2 1.9 3.1 3.7-.1 2-1.7 3.5-3.8 3.5"/><path d="M9.4 14.6a2.9 2.9 0 0 1 4.8-1.1"/><path d="M14.5 11.9l-.1 1.8-1.8-.2"/><path d="M14.5 15.8a2.9 2.9 0 0 1-4.7 1.1"/><path d="M9.5 18.4l.1-1.8 1.8.2"/>`,
+        search: `<path d="M10.7 4.4c3.6-.1 6.4 2.7 6.3 6.2-.1 3.5-2.9 6.3-6.4 6.2-3.5-.1-6.2-2.9-6.1-6.4.1-3.4 2.8-5.9 6.2-6Z"/><path d="M15.4 15.5c1.4 1.3 2.8 2.8 4.2 4.1"/>`,
+        grid: `<path d="M4.5 4.8c1.9-.2 3.9-.1 5.6 0 .1 1.9.1 3.8 0 5.5-1.8.1-3.7.2-5.6 0-.1-1.8-.1-3.7 0-5.5Z"/><path d="M13.9 4.7c1.9-.1 3.8-.1 5.6.1.1 1.8.1 3.7 0 5.5-1.8.1-3.8.1-5.6 0-.1-1.9-.1-3.8 0-5.6Z"/><path d="M4.6 13.9c1.8-.1 3.7-.1 5.5 0 .1 1.9.1 3.8 0 5.6-1.8.1-3.7.1-5.5 0-.1-1.9-.1-3.8 0-5.6Z"/><path d="M13.9 14c1.9-.1 3.8-.1 5.6 0 .1 1.8.1 3.7 0 5.5-1.8.1-3.8.1-5.6 0-.1-1.8-.1-3.7 0-5.5Z"/>`,
+        list: `<path d="M5.2 6.8h.5M9.2 6.7c3.2-.2 6.5-.1 9.7 0"/><path d="M5.1 12h.6M9.1 12c3.3-.1 6.6.1 9.8 0"/><path d="M5.2 17.3h.5M9.2 17.2c3.1-.1 6.4 0 9.6-.1"/>`,
+        sort: `<path d="M7.6 5.1c-.1 4.6.1 9.3 0 13.8"/><path d="M4.8 15.8c1 1.1 1.9 2.2 2.8 3.2.9-1 1.9-2.1 2.8-3.1"/><path d="M16.4 18.9c.1-4.6-.1-9.3 0-13.8"/><path d="M13.6 8.2c1-1.1 1.9-2.2 2.8-3.2.9 1 1.9 2.1 2.8 3.1"/>`,
+        toc: `<path d="M5.2 6.5c4.6-.2 9.1-.1 13.6 0"/><path d="M5.3 12c3.8-.1 7.6 0 11.4-.1"/><path d="M5.2 17.4c4.2-.1 8.5.1 12.7 0"/>`,
+        bookmark: `<path d="M6.8 4.4c3.5-.3 7-.2 10.4 0 .2 5 .1 10.1.2 15.2-1.8-1.4-3.6-2.7-5.4-4-1.8 1.3-3.6 2.7-5.3 4 .1-5.1-.1-10.2.1-15.2Z"/>`,
+        tts: `<path d="M4.8 13.8c-.2-4.6 3.1-8.5 7.3-8.4 4.2.1 7.4 3.9 7.1 8.5"/><path d="M4.7 13.5c1.3-.1 2.6.2 2.8 1.5.2 1.4.2 2.8-.2 3.9-1.2.3-2.5.1-2.8-1.2-.2-1.4-.1-2.8.2-4.2Z"/><path d="M19.3 13.5c-1.3-.1-2.6.2-2.8 1.5-.2 1.4-.2 2.8.2 3.9 1.2.3 2.5.1 2.8-1.2.2-1.4.1-2.8-.2-4.2Z"/>`,
+        type: `<path d="M4.8 17.8c1.4-3.8 2.9-7.7 4.4-11.5 1.4 3.9 2.9 7.7 4.2 11.6"/><path d="M6.4 13.8c1.8-.1 3.7-.1 5.5 0"/><path d="M15.4 11.8c1.1-.8 2.8-.7 3.4.5.5 1.1.3 3.4.4 5.3"/><path d="M19 14.3c-1.6-.2-3.5.3-3.7 1.8-.2 1.5 1.8 2.1 3.6.9"/>`,
+        page: `<path d="M5.4 4.5c3.7-.2 7.5-.1 11.2 0 .2 4.9.1 9.8.1 14.8-3.8.2-7.5.1-11.3 0-.1-5-.1-9.9 0-14.8Z"/><path d="M16.7 13.6c-1.8.2-3.6.3-4.6 1.5-.9 1.1-1 2.6-.9 4.2"/>`,
+        moon: `<path d="M17.8 14.8c-1.6.9-3.6 1.1-5.4.4-2.8-1-4.5-3.8-4.1-6.8.3-1.8 1.2-3.3 2.6-4.3-3.5.3-6.4 3.2-6.6 6.8-.2 4.1 3 7.6 7.1 7.9 2.8.2 5.4-1.3 6.4-4Z"/>`,
+        sun: `<circle cx="12" cy="12" r="3.6"/><path d="M12 4.2v1.9M12 17.9v1.9M4.2 12h1.9M17.9 12h1.9M6.5 6.5l1.3 1.4M16.2 16.2l1.3 1.3M17.5 6.5l-1.3 1.3M7.8 16.2l-1.3 1.3"/>`,
+        crop: `<path d="M7.6 4.2c-.1 4.2 0 8.5.1 12.6 4.1.1 8.3 0 12.4-.1"/><path d="M4.1 7.6c4.2-.1 8.4-.1 12.6 0 .1 4.1.1 8.2 0 12.3"/>`,
+        filter: `<path d="M5 7.4h14M5 12.2h14M5 17h14"/><circle cx="9.2" cy="7.4" r="1.8" fill="var(--p-surface, #fff)"/><circle cx="15.2" cy="12.2" r="1.8" fill="var(--p-surface, #fff)"/><circle cx="10.8" cy="17" r="1.8" fill="var(--p-surface, #fff)"/>`,
+        note: `<path d="M15.8 4.8c1.1 1.1 2.3 2.2 3.3 3.4-3.3 3.4-6.7 6.8-10.1 10.1-1.5.4-3 .7-4.5 1 .4-1.5.8-3 1.2-4.5 3.4-3.3 6.7-6.7 10.1-10Z"/><path d="M13.6 7.1l3.2 3.2"/>`,
+        gear: `<circle cx="12" cy="12" r="3.1"/><path d="M12 4.3v2.1M12 17.6v2.1M4.3 12h2.1M17.6 12h2.1M6.6 6.6l1.5 1.5M15.9 15.9l1.5 1.5M17.4 6.6l-1.5 1.5M8.1 15.9l-1.5 1.5"/>`,
+        back: `<path d="M14.8 6.1c-2 2-4.1 3.9-6 5.9 1.9 2 4 4 6 5.9"/>`,
+        play: `<path d="M8.2 6.2c3.3 1.9 6.6 3.8 9.8 5.8-3.3 1.9-6.5 3.9-9.8 5.8-.1-3.9-.1-7.7 0-11.6Z"/>`,
+        plus: `<path d="M12 5.4c-.1 4.4.1 8.8 0 13.2"/><path d="M5.4 12c4.4-.1 8.8.1 13.2 0"/>`,
+        folder: `<path d="M4.2 6.6c1.9-.2 3.7-.1 5.5 0l1.8 2c2.8-.1 5.6 0 8.3.1.2 3.4.1 6.9 0 10.3-5.2.2-10.4.2-15.6 0-.2-4.1-.1-8.3 0-12.4Z"/>`,
+        file: `<path d="M6.4 4.3c2.9-.1 5.7-.1 8.5 0l3.1 3.3c.1 4.1.1 8.1 0 12.1-3.9.2-7.8.1-11.6 0-.2-5.1-.1-10.3 0-15.4Z"/><path d="M14.6 4.4c-.1 1.2 0 2.4.1 3.5 1.1.1 2.2.1 3.3 0"/>`,
+        refresh: `<path d="M18.6 11.4a6.7 6.7 0 1 1-1.9-4.7"/><path d="M17.3 4.2l.2 3.3-3.3-.2"/>`,
+        rotate: `<path d="M6.2 7.8c2.6-2.5 6.8-2.6 9.5-.1 1.6 1.5 2.4 3.6 2.2 5.7"/><path d="M17.8 16.2c-2.6 2.5-6.8 2.6-9.5.1-1.6-1.5-2.4-3.6-2.2-5.7"/><path d="M14.9 4.8l1.7 3-3.1.8"/>`,
+        more: `<circle cx="6.5" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.2" fill="currentColor" stroke="none"/><circle cx="17.5" cy="12" r="1.2" fill="currentColor" stroke="none"/>`,
+        check: `<path d="M5.6 12.4c1.5 1.4 2.9 2.9 4.3 4.4 2.8-3.3 5.7-6.5 8.6-9.7"/>`,
+        spark: `<path d="M12 4.3c.6 3.5 2.1 5.5 5.7 6.2-3.6.7-5.1 2.6-5.7 6.2-.6-3.6-2.1-5.5-5.7-6.2 3.6-.7 5.1-2.7 5.7-6.2Z"/>`
+      };
+      return `<svg class="sketch-icon ${extraClass}" width="${size}" height="${size}" viewBox="0 0 24 24">${paths[name] || ''}</svg>`;
+    }
+
+    const iconGalleryItems = [
+      ['bookshelf','书架'],['manga','漫画'],['import','导入'],['sync','同步'],
+      ['search','搜索'],['toc','目录'],['bookmark','书签'],['tts','听书'],
+      ['type','排版'],['page','翻页'],['moon','夜间'],['crop','裁边'],
+      ['filter','滤镜'],['folder','目录'],['note','笔记'],['gear','设置']
+    ];
+
+    const state = {
+      floatingMode: true,
+      phoneDark: false,
+      screen: 'bookshelf',
+      bookView: 'grid',
+      bookCategory: '全部',
+      bookQuery: '',
+      mangaCategory: '全部',
+      mangaQuery: '',
+      activeBookIdx: 0,
+      activeMangaIdx: 0,
+      brMenuOpen: false,
+      brSheetTab: null,
+      brTheme: 'parchment',
+      brFontSize: 16,
+      brLineHeight: 1.85,
+      brAnim: '仿真',
+      brPage: 1,
+      brTotalPages: 5,
+      brHighlightOpen: false,
+      brBookmarked: true,
+      mrMenuOpen: false,
+      mrSheetOpen: false,
+      mrTab: 'mode',
+      mrMode: 'rtl',
+      mrCrop: true,
+      mrSplit: true,
+      mrWarmFilter: false,
+      mrBg: '#0B0C0E',
+      mrPage: 14,
+      mrTotalPages: 36,
+      importAutoClassify: true,
+      importFilter: '全部',
+      importFiles: [
+        { id: 1, name: '思考，快与慢.epub', fmt: 'EPUB', size: '2.4 MB', kind: 'book', checked: true, author: '丹尼尔·卡尼曼' },
+        { id: 2, name: '迷宫饭 Vol.01.cbz', fmt: 'CBZ', size: '68.5 MB', kind: 'manga', checked: true, author: '九井谅子' },
+        { id: 3, name: '诡秘之主.txt', fmt: 'TXT', size: '14.2 MB', kind: 'book', checked: true, author: '爱潜水的乌贼' },
+        { id: 4, name: 'Android 架构指南.pdf', fmt: 'PDF', size: '18.6 MB', kind: 'book', checked: false, author: '技术丛书' }
+      ],
+      davSyncing: false,
+      davLastSync: '2 分钟前',
+      davConflictModal: false,
+      davToggles: { progress: true, meta: true, prefs: true, files: true }
+    };
+
+    const books = [
+      { title: '三体 II · 黑暗森林', author: '刘慈欣', fmt: 'EPUB', progress: 42, cat: '在读', chapter: '第十四章 · 黑暗森林', color: 'from-[#1E3246] to-[#3B5978]', pages: [
+        '宇宙就是一座黑暗森林，每个文明都是带枪的猎人，像幽灵般潜行于林间，轻轻拨开挡路的树枝，竭力不让脚步发出一点儿声音，连呼吸都必须小心翼翼。',
+        '他必须小心，因为林中到处都有与他一样潜行的猎人。如果他发现了别的生命，不管是不是猎人，不管是天使还是魔鬼，能做的只有一件事：开枪消灭之。',
+        '点击屏幕中央可呼出 FloatingCard 悬浮阅读控制层与手绘线性图标菜单；支持仿真卷曲翻页、TTS 语音朗读与 PDF 文本重排。'
+      ]},
+      { title: '活着', author: '余华', fmt: 'EPUB', progress: 68, cat: '文学', chapter: '第七章 · 晚年', color: 'from-[#8C4A32] to-[#B86B4B]', pages: ['人是为了活着本身而活着的，而不是为了活着之外的任何事物所活着。']},
+      { title: '深度工作', author: '卡尔·纽波特', fmt: 'PDF', progress: 91, cat: '技术', chapter: '法则四 · 拥抱无聊', color: 'from-[#2D5A4C] to-[#4A7C6A]', pages: ['V1.0 原生支持 PDF 原版页面缩放切白边与智能文本重排（Reflow）双模式。']},
+      { title: '百年孤独', author: '马尔克斯', fmt: 'MOBI', progress: 24, cat: '文学', chapter: '第三章 · 马孔多', color: 'from-[#6B4E71] to-[#916D98]', pages: ['多年以后，面对行刑队，奥雷里亚诺·布恩迪亚上校将会回想起父亲带他去见识冰块的那个遥远的下午。']},
+      { title: '明朝那些事儿', author: '当年明月', fmt: 'TXT', progress: 15, cat: '在读', chapter: '第一部 · 洪武大帝', color: 'from-[#7A5C38] to-[#A68255]', pages: ['Rust 底层流式读取超大 TXT，自动识别编码与正则分章，毫秒响应。']},
+      { title: '设计心理学', author: '唐·诺曼', fmt: 'EPUB', progress: 100, cat: '已读完', chapter: '全书完 · 书签 18', color: 'from-[#3D4B5C] to-[#5E728A]', pages: ['好的设计具有可视性与自然匹配。']}
+    ];
+
+    const mangas = [
+      { title: '浪客行', author: '井上雄彦', fmt: 'CBZ', unread: 12, cat: '追更中', ch: '第08话 · 关原之风', color: 'from-[#23252B] to-[#454954]', chapters: ['第08话 · 关原之风', '第07话 · 剑与心', '第06话 · 吉冈道场'], desc: 'V1.0 完整支持 CBZ/CBR/CB7 免解压流式阅读、智能裁切白边、跨页自动切分及横屏双页拼接。' },
+      { title: '钢之炼金术师', author: '荒川弘', fmt: 'CBZ', unread: 5, cat: '完结', ch: '第24话 · 贤者之石', color: 'from-[#6A2C2C] to-[#9E4242]', chapters: ['第24话 · 贤者之石', '第23话 · 炼成阵'], desc: '单行本多卷目录自动聚合归档。' },
+      { title: '迷宫饭', author: '九井谅子', fmt: 'ZIP', unread: 28, cat: '单行本', ch: '第04话 · 走路菇火锅', color: 'from-[#365745] to-[#548269]', chapters: ['第04话 · 走路菇火锅', '第03话 · 宝箱怪'], desc: '直接索引 ZIP 内部图片流，零多余磁盘占用。' },
+      { title: '进击的巨人', author: '谏山创', fmt: 'CBR', unread: 0, cat: '完结', ch: '最终话 · 致两千年后的你', color: 'from-[#3D352E] to-[#6B5D52]', chapters: ['最终话 · 致两千年后的你'], desc: 'Rust 原生解码 RAR/CBR 与 7Z/CB7。' },
+      { title: '电锯人', author: '藤本树', fmt: 'CBZ', unread: 9, cat: '追更中', ch: '第15话 · 暗之恶魔', color: 'from-[#7A3528] to-[#B8573B]', chapters: ['第15话 · 暗之恶魔'], desc: '暗夜暖色滤镜与对比度调节。' },
+      { title: '我独自升级', author: 'DUBU', fmt: '文件夹', unread: 19, cat: '彩漫', ch: '第45话 · 暗影君王', color: 'from-[#2A3359] to-[#4A5996]', chapters: ['第45话 · 暗影君王'], desc: '韩漫全彩条漫连续无缝滚动模式。' }
+    ];
+
+    const brThemes = {
+      white:     { name: '纸白', bg: '#FFFFFF', fg: '#1D1D1F', sub: '#7A7A80', hl: '#FFE599' },
+      parchment: { name: '羊皮纸', bg: '#F5EFE2', fg: '#32291E', sub: '#877865', hl: '#EED29A' },
+      sage:      { name: '护眼绿', bg: '#DCE8DB', fg: '#233324', sub: '#5E7560', hl: '#BCE0B8' },
+      dark:      { name: '深灰夜', bg: '#1E2024', fg: '#C8C6C0', sub: '#777980', hl: '#463E26' },
+      oled:      { name: 'OLED黑', bg: '#000000', fg: '#A8A8A8', sub: '#5A5A5A', hl: '#332C18' }
+    };
+
+    const specs = {
+      bookshelf: {
+        title: '书架 · FloatingCard 悬浮卡片布局',
+        desc: '采用 FloatingCard 悬浮视觉层次：顶栏浮岛、继续阅读卡片、每本独立悬浮纸卡以及底部悬浮毛玻璃胶囊导航栏，所有功能图标均采用定制手绘细线单色钢笔风格。',
+        tips: [
+          '点击页面右上角「样式：FloatingCard 悬浮」可实时切换对比悬浮卡片风 vs 传统紧贴布局',
+          '点击「日间/暗夜」按钮观察手绘单色图标在浅色纸面与暗夜模式下的墨色自适应',
+          '点击任意悬浮书卡直接进入书籍阅读器，体验 FloatingCard 四边离缝控制层'
+        ]
+      },
+      manga: {
+        title: '漫画架 · FloatingCard & 手绘图标',
+        desc: '每部漫画包裹在柔和投影的悬浮卡片框架中，保留 Mihon 风格的左上角未读徽标与清晰格式标记，所有顶栏及导航图标统一为手绘单色线条。',
+        tips: [
+          '点击任意漫画浮卡进入漫画详情与章节列表',
+          '体验顶栏筛选胶囊与悬浮底栏之间的呼吸感留白'
+        ]
+      },
+      mangaDetail: {
+        title: '漫画详情页 · 分卷与快速续读',
+        desc: '封面区域下方采用 FloatingCard 浮岛承载续读按钮与章节列表，操作入口简洁克制。',
+        tips: ['点击「继续阅读」进入暗室漫画阅读引擎，点击画面中央呼出 FloatingCard 设置面板']
+      },
+      bookReader: {
+        title: '书籍阅读器 · FloatingCard 悬浮控制层',
+        desc: '点击页面中央呼出四边离缝的 FloatingCard 悬浮顶栏与悬浮底栏，全套图标采用手绘钢笔单色线条，内置 5 套纸张配色、仿真卷曲翻页、目录/书签抽屉与 TTS 听书入口。',
+        tips: [
+          '轻点页面【中央】呼出/收起 FloatingCard 悬浮工具栏',
+          '轻点【左/右边缘】翻页，点击高亮句体验划词批注浮层',
+          '在底部浮卡依次切换「目录 / 夜间 / 排版 / 翻页」'
+        ]
+      },
+      mangaReader: {
+        title: '漫画阅读器 · 暗室 FloatingCard 悬浮面板',
+        desc: '在纯黑暗室画布上悬浮半透明深色毛玻璃 FloatingCard，采用柔和白墨手绘线性图标，完整支持从右到左 / 从左到右 / 条漫滚动 / 双页拼接及智能裁边、跨页自动切分。',
+        tips: [
+          '轻点画布【中央】呼出暗室 FloatingCard 控制层',
+          '点击「设置」体验 Mihon 风格悬浮三标签卡，实测 4 大阅读模式与智能裁边/暖色滤镜'
+        ]
+      },
+      import: {
+        title: '本地智能导入中心 · FloatingCard 列表',
+        desc: '所有文件选择卡、智能分拣卡、待导入文件项及底部悬浮提交条统一采用 FloatingCard 层次与手绘图标。',
+        tips: ['勾选文件后点击底部悬浮条「导入至架」，新书/新漫将直接进入书架与漫画架']
+      },
+      webdav: {
+        title: 'WebDAV 多端同步 · V1.0 全层覆盖',
+        desc: 'V1.0 同时包含 Layer 1（进度/书签/笔记/配置秒级增量同步）与 Layer 2（书籍/漫画源文件按需 Wi-Fi 同步），并配备直观的多端进度冲突决策浮卡。',
+        tips: ['点击「立即同步」或「模拟进度冲突」体验悬浮冲突对比弹窗']
+      }
+    };
+
+    function showToast(msg) {
+      const el = document.getElementById('phone-toast');
+      el.textContent = msg;
+      el.classList.remove('hidden');
+      clearTimeout(el._t);
+      el._t = setTimeout(() => el.classList.add('hidden'), 2000);
+    }
+
+    function toggleUiStyle() {
+      state.floatingMode = !state.floatingMode;
+      document.getElementById('btn-style').textContent = state.floatingMode ? '样式：FloatingCard 悬浮' : '样式：经典 MD3 贴边';
+      render();
+    }
+
+    function togglePhoneTheme() {
+      state.phoneDark = !state.phoneDark;
+      const ps = document.getElementById('phone-screen');
+      ps.classList.toggle('phone-dark', state.phoneDark);
+      ps.classList.toggle('phone-light', !state.phoneDark);
+      document.getElementById('theme-label').textContent = state.phoneDark ? '暗夜深色' : '暖纸日间';
+      document.getElementById('theme-dot').className = state.phoneDark ? 'w-2 h-2 rounded-full bg-indigo-400' : 'w-2 h-2 rounded-full bg-amber-500';
+      render();
+    }
+
+    function jumpScreen(name) {
+      state.screen = name;
+      state.brMenuOpen = false;
+      state.brSheetTab = null;
+      state.mrMenuOpen = false;
+      state.mrSheetOpen = false;
+      render();
+    }
+
+    function openBookReader(idx) {
+      state.activeBookIdx = idx;
+      state.brPage = 1;
+      state.brMenuOpen = false;
+      state.brSheetTab = null;
+      state.brHighlightOpen = false;
+      state.screen = 'bookReader';
+      render();
+    }
+
+    function openMangaDetail(idx) {
+      state.activeMangaIdx = idx;
+      state.screen = 'mangaDetail';
+      render();
+    }
+
+    function openMangaReader(idx) {
+      if (typeof idx === 'number') state.activeMangaIdx = idx;
+      const m = mangas[state.activeMangaIdx];
+      state.mrMode = m.cat === '彩漫' ? 'webtoon' : 'rtl';
+      state.mrMenuOpen = false;
+      state.mrSheetOpen = false;
+      state.screen = 'mangaReader';
+      render();
+    }
+
+    function renderBookshelf() {
+      const cats = ['全部', '在读', '文学', '技术', '已读完'];
+      const filtered = books.filter(b =>
+        (state.bookCategory === '全部' || b.cat === state.bookCategory) &&
+        (!state.bookQuery || b.title.includes(state.bookQuery) || b.author.includes(state.bookQuery))
+      );
+      const last = books[0];
+      const fc = state.floatingMode;
+      return `
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <!-- Header -->
+          <div class="${fc ? 'mx-3 mt-1.5 mb-2 px-3.5 py-2 rounded-[20px] floating-card' : 'px-4 pt-2 pb-2'} flex items-center justify-between shrink-0">
+            <h2 class="text-lg font-bold tracking-tight">书架</h2>
+            <div class="flex items-center gap-1">
+              <button onclick="showToast('展开书架搜索')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer hover:opacity-75" style="background: var(--p-surface-2);">${ico('search', 16)}</button>
+              <button onclick="state.bookView = state.bookView==='grid'?'list':'grid'; render();" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer hover:opacity-75" style="background: var(--p-surface-2);">${ico(state.bookView === 'grid' ? 'list' : 'grid', 16)}</button>
+              <button onclick="showToast('已按最近阅读排序')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer hover:opacity-75" style="background: var(--p-surface-2);">${ico('sort', 16)}</button>
+            </div>
+          </div>
+
+          <!-- Category Chips -->
+          <div class="px-3.5 pb-2.5 flex gap-1.5 overflow-x-auto hide-scrollbar shrink-0">
+            ${cats.map(c => {
+              const active = state.bookCategory === c;
+              return `<button onclick="state.bookCategory='${c}'; render();"
+                class="px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap cursor-pointer transition ${fc && !active ? 'floating-card' : ''}"
+                style="background: ${active ? 'var(--p-accent)' : (fc ? 'var(--p-surface)' : 'var(--p-surface-2)')}; color: ${active ? 'var(--p-accent-fg)' : 'var(--p-muted)'};">${c}</button>`;
+            }).join('')}
+          </div>
+
+          <!-- Scroll Area -->
+          <div class="flex-1 overflow-y-auto hide-scrollbar px-3.5 ${fc ? 'pb-24' : 'pb-16'} space-y-3">
+            <!-- Floating Continue Reading Card -->
+            <div onclick="openBookReader(0)" class="p-3 rounded-[20px] flex items-center gap-3 cursor-pointer active:scale-[0.99] transition ${fc ? 'floating-card' : 'border'}"
+                 style="${fc ? '' : 'background: var(--p-surface); border-color: var(--p-border);'}">
+              <div class="w-11 h-15 rounded-xl bg-gradient-to-br ${last.color} text-white flex flex-col justify-between p-1.5 shrink-0 shadow">
+                <span class="text-[8px] opacity-75">${last.fmt}</span>
+                <span class="text-[9px] font-bold leading-tight serif-book">三体 II</span>
+              </div>
+              <div class="flex-1 min-w-0">
+                <div class="text-[10px] font-medium flex items-center gap-1" style="color: var(--p-accent);">${ico('sync', 11)} 继续阅读 · 云端同步</div>
+                <div class="text-xs font-semibold truncate mt-0.5">${last.title}</div>
+                <div class="text-[10px] truncate mt-0.5" style="color: var(--p-muted);">${last.chapter} · ${last.progress}%</div>
+                <div class="h-1 rounded-full mt-1.5 overflow-hidden" style="background: var(--p-surface-2);">
+                  <div class="h-full rounded-full" style="width:${last.progress}%; background: var(--p-accent);"></div>
+                </div>
+              </div>
+              <span class="w-9 h-9 rounded-full flex items-center justify-center shrink-0"
+                    style="background: var(--p-accent-soft); color: var(--p-accent);">${ico('play', 16)}</span>
+            </div>
+
+            <!-- Book Grid / List -->
+            ${state.bookView === 'grid' ? `
+              <div class="grid ${fc ? 'grid-cols-2 gap-3' : 'grid-cols-3 gap-2.5'}">
+                ${filtered.map(b => {
+                  const realIdx = books.indexOf(b);
+                  return fc ? `
+                    <div onclick="openBookReader(${realIdx})" class="floating-card rounded-[20px] p-2.5 cursor-pointer active:scale-[0.98] transition flex flex-col">
+                      <div class="relative aspect-[3/3.6] rounded-[13px] bg-gradient-to-br ${b.color} p-2.5 flex flex-col justify-between text-white shadow-sm">
+                        <span class="self-end px-1.5 py-0.5 rounded-md text-[8px] font-semibold bg-black/30 backdrop-blur-sm">${b.fmt}</span>
+                        <div>
+                          <div class="text-xs font-bold leading-snug line-clamp-2 serif-book">${b.title}</div>
+                          <div class="text-[9px] opacity-80 mt-0.5 truncate">${b.author}</div>
+                        </div>
+                      </div>
+                      <div class="mt-2 px-0.5">
+                        <div class="text-xs font-semibold truncate">${b.title}</div>
+                        <div class="flex items-center gap-1.5 mt-1">
+                          <div class="flex-1 h-1 rounded-full overflow-hidden" style="background: var(--p-surface-2);">
+                            <div class="h-full rounded-full" style="width:${b.progress}%; background: ${b.progress===100?'var(--p-ok)':'var(--p-accent)'};"></div>
+                          </div>
+                          <span class="text-[10px] font-mono" style="color: var(--p-muted);">${b.progress}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  ` : `
+                    <div onclick="openBookReader(${realIdx})" class="cursor-pointer">
+                      <div class="relative aspect-[3/4.2] rounded-xl bg-gradient-to-br ${b.color} p-2 flex flex-col justify-between text-white shadow-sm">
+                        <span class="self-end px-1 py-0.5 rounded text-[8px] bg-black/35">${b.fmt}</span>
+                        <div class="text-[11px] font-bold leading-snug line-clamp-2 serif-book">${b.title}</div>
+                      </div>
+                      <div class="mt-1 text-[11px] font-medium truncate">${b.title}</div>
+                      <div class="text-[9px]" style="color: var(--p-muted);">${b.progress}%</div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            ` : `
+              <div class="space-y-2.5">
+                ${filtered.map(b => {
+                  const realIdx = books.indexOf(b);
+                  return `
+                    <div onclick="openBookReader(${realIdx})" class="${fc ? 'floating-card rounded-[18px]' : 'rounded-xl border'} p-2.5 flex items-center gap-3 cursor-pointer"
+                         style="${fc ? '' : 'background: var(--p-surface); border-color: var(--p-border);'}">
+                      <div class="w-10 h-14 rounded-xl bg-gradient-to-br ${b.color} text-white flex items-end p-1 text-[8px] font-bold shrink-0">${b.fmt}</div>
+                      <div class="flex-1 min-w-0">
+                        <div class="text-xs font-semibold truncate">${b.title}</div>
+                        <div class="text-[10px] mt-0.5 truncate" style="color: var(--p-muted);">${b.author} · ${b.chapter}</div>
+                        <div class="flex items-center gap-2 mt-1.5">
+                          <div class="flex-1 h-1 rounded-full overflow-hidden" style="background: var(--p-surface-2);">
+                            <div class="h-full rounded-full" style="width:${b.progress}%; background: var(--p-accent);"></div>
+                          </div>
+                          <span class="text-[10px] font-mono" style="color: var(--p-muted);">${b.progress}%</span>
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join('')}
+              </div>
+            `}
+          </div>
+          <!-- Floating Add Button -->
+          <button onclick="jumpScreen('import')"
+            class="absolute right-4 ${fc ? 'bottom-[82px]' : 'bottom-4'} w-11 h-11 rounded-2xl shadow-lg flex items-center justify-center cursor-pointer active:scale-95 transition z-20"
+            style="background: var(--p-accent); color: var(--p-accent-fg);" title="导入本地书籍">${ico('plus', 20)}</button>
+        </div>
+      `;
+    }
+
+    function renderMangaShelf() {
+      const cats = ['全部', '追更中', '单行本', '彩漫', '完结'];
+      const filtered = mangas.filter(m => state.mangaCategory === '全部' || m.cat === state.mangaCategory);
+      const fc = state.floatingMode;
+      return `
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <div class="${fc ? 'mx-3 mt-1.5 mb-2 px-3.5 py-2 rounded-[20px] floating-card' : 'px-4 pt-2 pb-2'} flex items-center justify-between shrink-0">
+            <h2 class="text-lg font-bold tracking-tight">漫画</h2>
+            <div class="flex items-center gap-1">
+              <button onclick="showToast('筛选：本地漫画压缩包')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer" style="background: var(--p-surface-2);">${ico('filter', 16)}</button>
+              <button onclick="showToast('已刷新监听漫画目录')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer" style="background: var(--p-surface-2);">${ico('refresh', 16)}</button>
+            </div>
+          </div>
+          <div class="px-3.5 pb-2.5 flex gap-1.5 overflow-x-auto hide-scrollbar shrink-0">
+            ${cats.map(c => {
+              const active = state.mangaCategory === c;
+              return `<button onclick="state.mangaCategory='${c}'; render();"
+                class="px-3 py-1 rounded-full text-xs font-medium whitespace-nowrap cursor-pointer ${fc && !active ? 'floating-card' : ''}"
+                style="background: ${active ? 'var(--p-accent)' : (fc ? 'var(--p-surface)' : 'var(--p-surface-2)')}; color: ${active ? 'var(--p-accent-fg)' : 'var(--p-muted)'};">${c}</button>`;
+            }).join('')}
+          </div>
+          <div class="flex-1 overflow-y-auto hide-scrollbar px-3.5 ${fc ? 'pb-24' : 'pb-16'}">
+            <div class="grid ${fc ? 'grid-cols-2 gap-3' : 'grid-cols-3 gap-2.5'}">
+              ${filtered.map(m => {
+                const realIdx = mangas.indexOf(m);
+                return fc ? `
+                  <div onclick="openMangaDetail(${realIdx})" class="floating-card rounded-[20px] p-2 cursor-pointer active:scale-[0.98] transition">
+                    <div class="relative aspect-[3/3.9] rounded-[14px] overflow-hidden bg-gradient-to-br ${m.color}">
+                      <div class="absolute inset-0 opacity-20 manga-panel"></div>
+                      <div class="absolute top-2 left-2 right-2 flex items-center justify-between">
+                        ${m.unread > 0
+                          ? `<span class="px-1.5 py-0.5 rounded-md text-[10px] font-bold bg-[#3B5978] text-white shadow">${m.unread}</span>`
+                          : `<span class="w-5 h-5 rounded-md bg-[#2E7D5B] text-white flex items-center justify-center">${ico('check', 11)}</span>`
+                        }
+                        <span class="px-1.5 py-0.5 rounded text-[8px] font-semibold bg-black/45 text-white/90">${m.fmt}</span>
+                      </div>
+                      <div class="absolute inset-x-0 bottom-0 pt-7 pb-2 px-2 bg-gradient-to-t from-black/80 to-transparent text-white">
+                        <div class="text-xs font-bold leading-tight truncate">${m.title}</div>
+                      </div>
+                    </div>
+                    <div class="mt-1.5 px-1 flex items-center justify-between text-[10px]" style="color: var(--p-muted);">
+                      <span class="truncate">${m.author}</span>
+                      <span>${m.cat === '彩漫' ? '条漫' : '日漫'}</span>
+                    </div>
+                  </div>
+                ` : `
+                  <div onclick="openMangaDetail(${realIdx})" class="relative aspect-[3/4.3] rounded-xl overflow-hidden bg-gradient-to-br ${m.color} cursor-pointer">
+                    <div class="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold bg-[#3B5978] text-white">${m.unread || '✓'}</div>
+                    <div class="absolute inset-x-0 bottom-0 p-2 bg-gradient-to-t from-black/85 to-transparent text-white text-[11px] font-bold truncate">${m.title}</div>
+                  </div>
+                `;
+              }).join('')}
+            </div>
+          </div>
+          <button onclick="jumpScreen('import')"
+            class="absolute right-4 ${fc ? 'bottom-[82px]' : 'bottom-4'} w-11 h-11 rounded-2xl shadow-lg flex items-center justify-center cursor-pointer z-20"
+            style="background: var(--p-accent); color: var(--p-accent-fg);">${ico('plus', 20)}</button>
+        </div>
+      `;
+    }
+
+    function renderMangaDetail() {
+      const m = mangas[state.activeMangaIdx];
+      return `
+        <div class="flex-1 flex flex-col overflow-hidden">
+          <div class="relative px-4 pt-2 pb-5 bg-gradient-to-b ${m.color} text-white">
+            <div class="flex items-center justify-between mb-3">
+              <button onclick="jumpScreen('manga')" class="w-8 h-8 rounded-full bg-black/25 flex items-center justify-center cursor-pointer">${ico('back', 16)}</button>
+              <button onclick="showToast('单作阅读偏好：RTL / 智能裁边')" class="w-8 h-8 rounded-full bg-black/25 flex items-center justify-center cursor-pointer">${ico('more', 16)}</button>
+            </div>
+            <div class="flex gap-3.5 items-end">
+              <div class="w-22 aspect-[3/4.2] rounded-2xl bg-black/30 border border-white/20 p-2 flex flex-col justify-between shrink-0 shadow-lg">
+                <span class="self-end text-[8px] px-1.5 py-0.5 rounded bg-black/50">${m.fmt}</span>
+                <span class="text-xs font-bold leading-tight">${m.title}</span>
+              </div>
+              <div class="flex-1 min-w-0">
+                <h2 class="text-base font-bold">${m.title}</h2>
+                <div class="text-xs opacity-80 mt-0.5">${m.author} · ${m.cat}</div>
+                <div class="mt-2 flex gap-1.5 text-[10px]">
+                  <span class="px-2 py-0.5 rounded-full bg-white/15">${m.cat === '彩漫' ? '条漫' : '从右到左'}</span>
+                  <span class="px-2 py-0.5 rounded-full bg-white/15">自动裁边</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="flex-1 overflow-y-auto hide-scrollbar p-3.5 space-y-3">
+            <div class="floating-card rounded-[20px] p-3.5 space-y-2.5">
+              <button onclick="openMangaReader(${state.activeMangaIdx})"
+                class="w-full py-2.5 rounded-full text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5"
+                style="background: var(--p-accent); color: var(--p-accent-fg);">${ico('play', 14)} 继续阅读 · ${m.ch}</button>
+              <p class="text-[11px] leading-relaxed" style="color: var(--p-muted);">${m.desc}</p>
+            </div>
+            <div class="floating-card rounded-[20px] p-3 space-y-1.5">
+              <div class="text-xs font-semibold px-1 pb-1">分卷 / 章节 (${m.chapters.length})</div>
+              ${m.chapters.map((ch, i) => `
+                <div onclick="openMangaReader(${state.activeMangaIdx})" class="px-2.5 py-2.5 rounded-xl flex items-center justify-between cursor-pointer" style="background: ${i===0?'var(--p-accent-soft)':'var(--p-surface-2)'};">
+                  <span class="text-xs font-medium">${ch}</span>
+                  <span class="text-[10px]" style="color: ${i===0?'var(--p-accent)':'var(--p-muted)'};">${i===0?'上次 P.14':'未读'}</span>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    }
+
+    function renderBookReader() {
+      const b = books[state.activeBookIdx];
+      const th = brThemes[state.brTheme];
+      const fc = state.floatingMode;
+      const text = b.pages[(state.brPage - 1) % b.pages.length];
+      return `
+        <div class="flex-1 relative flex flex-col overflow-hidden transition-colors" style="background:${th.bg}; color:${th.fg};">
+          <div class="px-5 pt-2 pb-1 flex items-center justify-between text-[10px]" style="color:${th.sub};">
+            <span class="truncate">${b.chapter}</span>
+            <span>${state.brBookmarked ? ico('bookmark', 13) : ''}</span>
+          </div>
+
+          <div class="flex-1 relative px-6 py-4 overflow-hidden">
+            <div class="absolute inset-0 flex z-10">
+              <div onclick="state.brPage=Math.max(1,state.brPage-1); state.brMenuOpen=false; state.brSheetTab=null; render(); showToast('上一页 ('+state.brAnim+')');" class="w-[26%] h-full cursor-pointer"></div>
+              <div onclick="state.brMenuOpen=!state.brMenuOpen; if(!state.brMenuOpen) state.brSheetTab=null; state.brHighlightOpen=false; render();" class="flex-1 h-full cursor-pointer"></div>
+              <div onclick="state.brPage=Math.min(state.brTotalPages,state.brPage+1); state.brMenuOpen=false; state.brSheetTab=null; render(); showToast('下一页 ('+state.brAnim+')');" class="w-[26%] h-full cursor-pointer"></div>
+            </div>
+
+            <div class="serif-book relative z-0 space-y-4" style="font-size:${state.brFontSize}px; line-height:${state.brLineHeight};">
+              <div class="text-lg font-bold tracking-wide mb-3">${b.chapter}</div>
+              <p class="indent-8">${text}</p>
+              <p class="indent-8">
+                <span onclick="event.stopPropagation(); state.brHighlightOpen=!state.brHighlightOpen; state.brMenuOpen=false; render();"
+                      class="relative z-20 rounded px-0.5 cursor-pointer" style="background:${th.hl};">给岁月以文明，而不是给文明以岁月。</span>
+                轻点中央唤起 FloatingCard 悬浮面板，所有控制图标均采用手绘单色细线设计。
+              </p>
+            </div>
+
+            ${state.brHighlightOpen ? `
+              <div class="absolute left-1/2 -translate-x-1/2 top-44 z-30 flex items-center gap-1 px-2.5 py-1.5 rounded-full bg-[#1C1B1F] text-white text-[11px] shadow-xl animate-fade">
+                <button onclick="showToast('已复制'); state.brHighlightOpen=false; render();" class="px-2 py-0.5 rounded-full hover:bg-white/10 cursor-pointer">复制</button>
+                <span class="opacity-30">|</span>
+                <button onclick="showToast('已高亮'); state.brHighlightOpen=false; render();" class="px-2 py-0.5 rounded-full hover:bg-white/10 cursor-pointer">高亮</button>
+                <span class="opacity-30">|</span>
+                <button onclick="showToast('已添加笔记'); state.brHighlightOpen=false; render();" class="px-2 py-0.5 rounded-full hover:bg-white/10 cursor-pointer flex items-center gap-1">${ico('note', 12)} 笔记</button>
+              </div>
+            ` : ''}
+          </div>
+
+          <div class="px-5 pb-3 pt-1 flex items-center justify-between text-[10px]" style="color:${th.sub};">
+            <span>${Math.round(40 + state.brPage * 2.4)}% · ${state.brPage}/${state.brTotalPages}</span>
+            <span>10:26 · 86%</span>
+          </div>
+
+          <!-- Detached FloatingCard Reader Controls -->
+          ${state.brMenuOpen ? `
+            <div class="absolute ${fc ? 'top-2.5 left-3 right-3 rounded-[20px] floating-dock' : 'top-0 inset-x-0 border-b'} px-3 py-2 flex items-center justify-between z-30 animate-float"
+                 style="color: var(--p-fg); ${fc ? '' : 'background: var(--p-surface); border-color: var(--p-border);'}">
+              <div class="flex items-center gap-2 min-w-0">
+                <button onclick="jumpScreen('bookshelf')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer" style="background: var(--p-surface-2);">${ico('back', 16)}</button>
+                <span class="text-xs font-semibold truncate">${b.title}</span>
+              </div>
+              <div class="flex items-center gap-1">
+                <button onclick="showToast('全文检索')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer">${ico('search', 16)}</button>
+                <button onclick="state.brBookmarked=!state.brBookmarked; showToast(state.brBookmarked?'已加书签':'移除书签'); render();" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer">${ico('bookmark', 16)}</button>
+                <button onclick="showToast('TTS 听书朗读已启动')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer">${ico('tts', 16)}</button>
+              </div>
+            </div>
+
+            <div class="absolute ${fc ? 'bottom-3 left-3 right-3 rounded-[26px] floating-dock' : 'bottom-0 inset-x-0 rounded-t-3xl border-t'} z-30 animate-float overflow-hidden"
+                 style="color: var(--p-fg); ${fc ? '' : 'background: var(--p-surface); border-color: var(--p-border);'}">
+              <div class="px-4 pt-3 pb-2 flex items-center gap-2 text-[11px]">
+                <button onclick="state.brPage=Math.max(1,state.brPage-1); render();" class="px-1.5 py-1 cursor-pointer" style="color: var(--p-muted);">上一章</button>
+                <input type="range" min="1" max="${state.brTotalPages}" value="${state.brPage}" oninput="state.brPage=Number(this.value); render();" class="flex-1 accent-[#3B5978]" />
+                <button onclick="state.brPage=Math.min(state.brTotalPages,state.brPage+1); render();" class="px-1.5 py-1 cursor-pointer" style="color: var(--p-muted);">下一章</button>
+              </div>
+
+              ${state.brSheetTab === 'style' ? `
+                <div class="px-4 py-3 border-t space-y-2.5 text-xs" style="border-color: var(--p-border);">
+                  <div class="flex items-center justify-between">
+                    <span style="color: var(--p-muted);">字号</span>
+                    <div class="flex items-center gap-2">
+                      <button onclick="state.brFontSize=Math.max(12,state.brFontSize-1); render();" class="w-8 h-7 rounded-lg border cursor-pointer" style="border-color: var(--p-border);">A-</button>
+                      <span class="w-6 text-center font-mono">${state.brFontSize}</span>
+                      <button onclick="state.brFontSize=Math.min(24,state.brFontSize+1); render();" class="w-8 h-7 rounded-lg border cursor-pointer" style="border-color: var(--p-border);">A+</button>
+                    </div>
+                  </div>
+                  <div class="grid grid-cols-5 gap-1.5">
+                    ${Object.entries(brThemes).map(([k, v]) => `
+                      <button onclick="state.brTheme='${k}'; render();" class="py-1.5 rounded-xl text-[10px] font-medium border-2 cursor-pointer"
+                        style="background:${v.bg}; color:${v.fg}; border-color:${state.brTheme===k?'#3B5978':'rgba(128,128,128,0.22)'};">${v.name}</button>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : state.brSheetTab === 'anim' ? `
+                <div class="px-4 py-3 border-t space-y-2 text-xs" style="border-color: var(--p-border);">
+                  <div class="grid grid-cols-4 gap-1.5">
+                    ${['仿真', '覆盖', '滑动', '滚动'].map(a => `
+                      <button onclick="state.brAnim='${a}'; showToast('翻页模式：'+state.brAnim); render();" class="py-1.5 rounded-xl text-xs cursor-pointer"
+                        style="background:${state.brAnim===a?'var(--p-accent)':'var(--p-surface-2)'}; color:${state.brAnim===a?'var(--p-accent-fg)':'var(--p-fg)'};">${a}</button>
+                    `).join('')}
+                  </div>
+                </div>
+              ` : state.brSheetTab === 'toc' ? `
+                <div class="px-4 py-2.5 border-t max-h-40 overflow-y-auto hide-scrollbar space-y-1 text-xs" style="border-color: var(--p-border);">
+                  ${['第十三章 · 面壁者', '第十四章 · 黑暗森林（当前）', '第十五章 · 咒语生效'].map((ch, idx) => `
+                    <div onclick="state.brPage=${idx+1}; state.brSheetTab=null; state.brMenuOpen=false; render();" class="px-2.5 py-2 rounded-xl cursor-pointer"
+                         style="background:${idx===1?'var(--p-accent-soft)':'transparent'}; color:${idx===1?'var(--p-accent)':'var(--p-fg)'};">${ch}</div>
+                  `).join('')}
+                </div>
+              ` : ''}
+
+              <div class="grid grid-cols-5 py-2.5 border-t text-[10px]" style="border-color: var(--p-border);">
+                <button onclick="state.brSheetTab=state.brSheetTab==='toc'?null:'toc'; render();" class="flex flex-col items-center gap-1 cursor-pointer" style="color:${state.brSheetTab==='toc'?'var(--p-accent)':'var(--p-muted)'};">${ico('toc', 17)}<span>目录</span></button>
+                <button onclick="state.brTheme=state.brTheme==='dark'||state.brTheme==='oled'?'parchment':'dark'; render();" class="flex flex-col items-center gap-1 cursor-pointer" style="color: var(--p-muted);">${ico(state.brTheme==='dark'||state.brTheme==='oled'?'sun':'moon', 17)}<span>日/夜</span></button>
+                <button onclick="state.brSheetTab=state.brSheetTab==='style'?null:'style'; render();" class="flex flex-col items-center gap-1 cursor-pointer" style="color:${state.brSheetTab==='style'?'var(--p-accent)':'var(--p-muted)'};">${ico('type', 17)}<span>排版</span></button>
+                <button onclick="state.brSheetTab=state.brSheetTab==='anim'?null:'anim'; render();" class="flex flex-col items-center gap-1 cursor-pointer" style="color:${state.brSheetTab==='anim'?'var(--p-accent)':'var(--p-muted)'};">${ico('page', 17)}<span>翻页</span></button>
+                <button onclick="showToast('更多：PDF重排 / 正则分章 / 九宫格点击区')" class="flex flex-col items-center gap-1 cursor-pointer" style="color: var(--p-muted);">${ico('gear', 17)}<span>更多</span></button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function nextManga(dir) {
+      const delta = (state.mrMode === 'rtl') ? (dir === 'left' ? 1 : -1) : (dir === 'right' ? 1 : -1);
+      state.mrPage = Math.max(1, Math.min(state.mrTotalPages, state.mrPage + delta));
+      state.mrMenuOpen = false;
+      state.mrSheetOpen = false;
+      render();
+      showToast(`第 ${state.mrPage} / ${state.mrTotalPages} 页`);
+    }
+
+    function renderMangaReader() {
+      const m = mangas[state.activeMangaIdx];
+      const fc = state.floatingMode;
+      const modeNames = { rtl: '从右到左', ltr: '从左到右', webtoon: '条漫滚动', dual: '双页拼接' };
+      const pageBlock = (num) => `
+        <div class="w-full bg-[#F2F0EB] text-[#1A1A1A] border-2 border-[#1A1A1A] ${state.mrCrop ? 'p-1.5' : 'p-4'} transition-all shadow-xl">
+          <div class="grid grid-cols-2 gap-1.5 h-[220px]">
+            <div class="col-span-2 border-2 border-[#1A1A1A] manga-panel p-2 flex flex-col justify-between bg-gradient-to-br from-[#ECEAE4] to-[#D8D4CA]">
+              <div class="flex justify-between text-[9px] font-bold">
+                <span class="px-1.5 py-0.5 bg-white border border-black">${m.title}</span>
+                <span>P.${num}</span>
+              </div>
+              <div class="text-center font-black tracking-widest text-sm opacity-75">「 风起关原 · 剑意如潮 」</div>
+              <div class="text-[9px] text-right opacity-60">${state.mrCrop ? '智能裁边 ON' : '原始白边'}</div>
+            </div>
+            <div class="border-2 border-[#1A1A1A] bg-[#222] text-white p-2 flex items-center justify-center text-[10px] font-bold">分镜 A</div>
+            <div class="border-2 border-[#1A1A1A] manga-panel bg-white p-2 flex items-center justify-center text-[10px] font-bold">分镜 B</div>
+          </div>
+        </div>
+      `;
+      return `
+        <div class="flex-1 relative flex flex-col overflow-hidden text-white" style="background:${state.mrBg};">
+          ${state.mrWarmFilter ? `<div class="pointer-events-none absolute inset-0 bg-amber-500/15 z-20 mix-blend-multiply"></div>` : ''}
+
+          <div class="flex-1 relative overflow-y-auto hide-scrollbar flex flex-col ${state.mrMode==='webtoon' ? 'items-stretch gap-1 p-1' : 'items-center justify-center px-3'}">
+            ${state.mrMode !== 'webtoon' ? `
+              <div class="absolute inset-0 flex z-10">
+                <div onclick="nextManga('left')" class="w-[28%] h-full cursor-pointer"></div>
+                <div onclick="state.mrMenuOpen=!state.mrMenuOpen; if(!state.mrMenuOpen) state.mrSheetOpen=false; render();" class="flex-1 h-full cursor-pointer"></div>
+                <div onclick="nextManga('right')" class="w-[28%] h-full cursor-pointer"></div>
+              </div>
+            ` : `
+              <div onclick="state.mrMenuOpen=!state.mrMenuOpen; if(!state.mrMenuOpen) state.mrSheetOpen=false; render();" class="cursor-pointer space-y-1 py-2">
+                ${pageBlock(state.mrPage)}
+                ${pageBlock(state.mrPage + 1)}
+              </div>
+            `}
+            ${state.mrMode === 'dual' ? `<div class="grid grid-cols-2 gap-1 w-full">${pageBlock(state.mrPage+1)}${pageBlock(state.mrPage)}</div>` : state.mrMode !== 'webtoon' ? pageBlock(state.mrPage) : ''}
+          </div>
+
+          ${!state.mrMenuOpen ? `
+            <div class="pointer-events-none absolute bottom-3 left-3 right-3 flex justify-between items-center text-[10px]">
+              <span class="px-2.5 py-0.5 rounded-full bg-black/60 text-white/80">${m.ch} · ${modeNames[state.mrMode]}</span>
+              <span class="px-2.5 py-0.5 rounded-full bg-black/70 text-white font-mono">${state.mrPage} / ${state.mrTotalPages}</span>
+            </div>
+          ` : `
+            <!-- Dark FloatingCard Top Bar -->
+            <div class="absolute ${fc ? 'top-2.5 left-3 right-3 rounded-[20px]' : 'top-0 inset-x-0'} px-3 py-2 bg-[#1A1C21EB] backdrop-blur-md border border-white/10 flex items-center justify-between z-30 shadow-2xl animate-float">
+              <div class="flex items-center gap-2 min-w-0">
+                <button onclick="jumpScreen('mangaDetail')" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center cursor-pointer">${ico('back', 16)}</button>
+                <div class="min-w-0">
+                  <div class="text-xs font-semibold truncate">${m.title}</div>
+                  <div class="text-[10px] text-white/60 truncate">${m.ch}</div>
+                </div>
+              </div>
+              <div class="flex items-center gap-1">
+                <button onclick="state.mrCrop=!state.mrCrop; showToast(state.mrCrop?'智能裁边已开':'已关'); render();" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer ${state.mrCrop?'bg-[#3B5978]':'bg-white/10'}">${ico('crop', 15)}</button>
+                <button onclick="showToast('屏幕方向锁定')" class="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center cursor-pointer">${ico('rotate', 15)}</button>
+              </div>
+            </div>
+
+            <!-- Dark FloatingCard Bottom Controls -->
+            <div class="absolute ${fc ? 'bottom-3 left-3 right-3' : 'bottom-0 inset-x-0'} z-30 space-y-2 animate-float">
+              ${!state.mrSheetOpen ? `
+                <div class="px-3.5 py-2 rounded-full bg-[#1A1C21EB] backdrop-blur-md border border-white/10 flex items-center gap-2.5 text-[11px] shadow-xl">
+                  <span class="font-mono text-white/80">${state.mrMode==='rtl'?state.mrTotalPages:state.mrPage}</span>
+                  <input type="range" min="1" max="${state.mrTotalPages}" value="${state.mrPage}" oninput="state.mrPage=Number(this.value); render();" class="flex-1 accent-[#82A9D4]" style="${state.mrMode==='rtl'?'direction:rtl':''}" />
+                  <span class="font-mono text-white/80">${state.mrMode==='rtl'?state.mrPage:state.mrTotalPages}</span>
+                </div>
+                <div class="${fc ? 'rounded-[24px]' : 'rounded-t-2xl'} bg-[#1A1C21F2] backdrop-blur-md border border-white/10 px-3 py-2.5 grid grid-cols-4 text-[10px] text-white/85 shadow-2xl">
+                  <button onclick="state.mrSheetOpen=true; state.mrTab='mode'; render();" class="flex flex-col items-center gap-1 cursor-pointer">${ico('page', 17)}<span>${modeNames[state.mrMode]}</span></button>
+                  <button onclick="state.mrCrop=!state.mrCrop; render();" class="flex flex-col items-center gap-1 cursor-pointer ${state.mrCrop?'text-[#82A9D4]':''}">${ico('crop', 17)}<span>裁边</span></button>
+                  <button onclick="state.mrSheetOpen=true; state.mrTab='filter'; render();" class="flex flex-col items-center gap-1 cursor-pointer">${ico('filter', 17)}<span>滤镜</span></button>
+                  <button onclick="state.mrSheetOpen=true; state.mrTab='mode'; render();" class="flex flex-col items-center gap-1 cursor-pointer">${ico('gear', 17)}<span>设置</span></button>
+                </div>
+              ` : `
+                <div class="${fc ? 'rounded-[26px]' : 'rounded-t-3xl'} bg-[#1A1C21F5] backdrop-blur-md border border-white/10 px-4 pt-3 pb-4 space-y-3 text-xs shadow-2xl">
+                  <div class="flex items-center justify-between">
+                    <div class="flex gap-1 bg-white/5 p-1 rounded-full">
+                      ${[['mode','阅读模式'],['filter','图像滤镜'],['general','常规']].map(([k, lbl]) => `
+                        <button onclick="state.mrTab='${k}'; render();" class="px-3 py-1 rounded-full text-[11px] font-medium cursor-pointer ${state.mrTab===k?'bg-[#82A9D4] text-[#0D1620]':'text-white/70'}">${lbl}</button>
+                      `).join('')}
+                    </div>
+                    <button onclick="state.mrSheetOpen=false; render();" class="w-7 h-7 rounded-full bg-white/10 text-white/80 cursor-pointer">✕</button>
+                  </div>
+                  ${state.mrTab === 'mode' ? `
+                    <div class="grid grid-cols-2 gap-2">
+                      ${[['rtl','从右到左 (日漫)'],['ltr','从左到右 (美漫)'],['webtoon','条漫无缝滚动'],['dual','双页拼接']].map(([k, lbl]) => `
+                        <button onclick="state.mrMode='${k}'; render();" class="py-2 px-2.5 rounded-xl text-[11px] text-left border cursor-pointer ${state.mrMode===k?'bg-[#263547] border-[#82A9D4] text-white':'bg-white/5 border-white/10 text-white/75'}">${lbl}</button>
+                      `).join('')}
+                    </div>
+                    <div class="flex items-center justify-between">
+                      <span class="text-[11px] text-white/80">跨页宽图自动切分</span>
+                      <button onclick="state.mrSplit=!state.mrSplit; render();" class="w-10 h-5 rounded-full p-0.5 cursor-pointer ${state.mrSplit?'bg-[#82A9D4]':'bg-white/20'}">
+                        <div class="w-4 h-4 rounded-full bg-white transition-transform ${state.mrSplit?'translate-x-5':''}"></div>
+                      </button>
+                    </div>
+                  ` : state.mrTab === 'filter' ? `
+                    <div class="space-y-2.5 text-[11px]">
+                      <div class="flex items-center justify-between">
+                        <span>智能裁切白边</span>
+                        <button onclick="state.mrCrop=!state.mrCrop; render();" class="w-10 h-5 rounded-full p-0.5 cursor-pointer ${state.mrCrop?'bg-[#82A9D4]':'bg-white/20'}"><div class="w-4 h-4 rounded-full bg-white transition-transform ${state.mrCrop?'translate-x-5':''}"></div></button>
+                      </div>
+                      <div class="flex items-center justify-between">
+                        <span>夜间暖色护眼滤镜</span>
+                        <button onclick="state.mrWarmFilter=!state.mrWarmFilter; render();" class="w-10 h-5 rounded-full p-0.5 cursor-pointer ${state.mrWarmFilter?'bg-[#82A9D4]':'bg-white/20'}"><div class="w-4 h-4 rounded-full bg-white transition-transform ${state.mrWarmFilter?'translate-x-5':''}"></div></button>
+                      </div>
+                    </div>
+                  ` : `
+                    <div class="space-y-2 text-[11px] text-white/80">
+                      <div class="flex justify-between py-1"><span>点击区布局</span><span class="text-[#82A9D4]">L 型单手模式</span></div>
+                      <div class="flex justify-between py-1"><span>音量键翻页</span><span class="text-[#82A9D4]">已开启</span></div>
+                    </div>
+                  `}
+                </div>
+              `}
+            </div>
+          `}
+        </div>
+      `;
+    }
+
+    function renderImport() {
+      const fc = state.floatingMode;
+      const filters = ['全部', 'EPUB', 'TXT', 'PDF', '漫画包'];
+      const list = state.importFiles.filter(f => state.importFilter === '全部' || (state.importFilter === '漫画包' ? f.kind === 'manga' : f.fmt === state.importFilter));
+      const checked = state.importFiles.filter(f => f.checked);
+      return `
+        <div class="flex-1 flex flex-col overflow-hidden relative">
+          <div class="${fc ? 'mx-3 mt-1.5 mb-2 px-3.5 py-2 rounded-[20px] floating-card' : 'px-4 pt-2 pb-2'} flex items-center justify-between shrink-0">
+            <h2 class="text-lg font-bold tracking-tight">导入中心</h2>
+            <button onclick="showToast('授权本地监听文件夹 (SAF)')" class="px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer flex items-center gap-1" style="background: var(--p-surface-2); color: var(--p-accent);">${ico('folder', 13)} 监听目录</button>
+          </div>
+          <div class="px-3.5 pb-2.5 grid grid-cols-2 gap-2.5">
+            <button onclick="showToast('选择本地书籍/漫画文件')" class="p-3 rounded-[18px] text-left cursor-pointer ${fc ? 'floating-card' : 'border'}" style="${fc?'':'background:var(--p-surface);border-color:var(--p-border);'}">
+              <div class="mb-1.5" style="color: var(--p-fg);">${ico('file', 20)}</div>
+              <div class="text-xs font-semibold">选择本地文件</div>
+              <div class="text-[10px]" style="color: var(--p-muted);">EPUB/TXT/PDF/CBZ</div>
+            </button>
+            <button onclick="showToast('深度扫描本地目录...')" class="p-3 rounded-[18px] text-left cursor-pointer" style="background: var(--p-accent-soft); color: var(--p-accent);">
+              <div class="mb-1.5">${ico('folder', 20)}</div>
+              <div class="text-xs font-semibold">智能扫描目录</div>
+              <div class="text-[10px] opacity-80">自动监测新增文件</div>
+            </button>
+          </div>
+          <div class="mx-3.5 mb-2.5 px-3 py-2 rounded-[16px] flex items-center justify-between gap-2 ${fc ? 'floating-card' : 'border'}" style="${fc?'':'background:var(--p-surface);border-color:var(--p-border);'}">
+            <div class="flex items-center gap-2 text-[11px]">
+              <span style="color: var(--p-accent);">${ico('spark', 15)}</span>
+              <div>
+                <span class="font-medium">智能分拣入架</span>
+                <span class="block text-[10px]" style="color: var(--p-muted);">书籍→书架，漫画压缩包→漫画架</span>
+              </div>
+            </div>
+            <button onclick="state.importAutoClassify=!state.importAutoClassify; render();" class="w-10 h-5 rounded-full p-0.5 cursor-pointer shrink-0" style="background:${state.importAutoClassify?'var(--p-accent)':'var(--p-border)'};">
+              <div class="w-4 h-4 rounded-full bg-white transition-transform ${state.importAutoClassify?'translate-x-5':''}"></div>
+            </button>
+          </div>
+          <div class="px-3.5 pb-2 flex gap-1.5 overflow-x-auto hide-scrollbar shrink-0">
+            ${filters.map(ft => `
+              <button onclick="state.importFilter='${ft}'; render();" class="px-2.5 py-1 rounded-full text-[11px] font-medium cursor-pointer whitespace-nowrap"
+                style="background:${state.importFilter===ft?'var(--p-accent)':'var(--p-surface-2)'}; color:${state.importFilter===ft?'var(--p-accent-fg)':'var(--p-muted)'};">${ft}</button>
+            `).join('')}
+          </div>
+          <div class="flex-1 overflow-y-auto hide-scrollbar px-3.5 space-y-2 ${fc ? 'pb-36' : 'pb-16'}">
+            ${list.map(f => `
+              <div onclick="toggleImportFile(${f.id})" class="p-2.5 rounded-[16px] flex items-center gap-2.5 cursor-pointer ${fc ? 'floating-card' : 'border'}"
+                   style="border-color:${f.checked?'var(--p-accent)':'var(--p-border)'}; ${fc?'':'background:var(--p-surface);'}">
+                <div class="w-5 h-5 rounded-md flex items-center justify-center shrink-0" style="background:${f.checked?'var(--p-accent)':'var(--p-surface-2)'}; color:${f.checked?'var(--p-accent-fg)':'transparent'};">${ico('check', 12)}</div>
+                <div class="px-1.5 py-1 rounded-lg text-[9px] font-bold shrink-0" style="background: var(--p-surface-2); color: var(--p-fg);">${f.fmt}</div>
+                <div class="flex-1 min-w-0">
+                  <div class="text-xs font-medium truncate">${f.name}</div>
+                  <div class="text-[10px]" style="color: var(--p-muted);">${f.size} · ${f.kind==='manga'?'漫画架':'书架'}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div class="absolute ${fc ? 'bottom-[78px] left-3 right-3 rounded-[20px] floating-dock' : 'bottom-0 inset-x-0 border-t'} px-3.5 py-2 flex items-center justify-between z-20"
+               style="${fc?'':'background:var(--p-surface);border-color:var(--p-border);'}">
+            <span class="text-[11px]" style="color: var(--p-muted);">已选 ${checked.length} 项</span>
+            <button onclick="doImport()" ${checked.length===0?'disabled':''} class="px-4 py-1.5 rounded-full text-xs font-semibold cursor-pointer disabled:opacity-40"
+              style="background: var(--p-accent); color: var(--p-accent-fg);">导入至架 (${checked.length})</button>
+          </div>
+        </div>
+      `;
+    }
+
+    function toggleImportFile(id) {
+      const f = state.importFiles.find(x => x.id === id);
+      if (f) f.checked = !f.checked;
+      render();
+    }
+
+    function doImport() {
+      const selected = state.importFiles.filter(f => f.checked);
+      if (!selected.length) return;
+      selected.forEach(f => {
+        if (f.kind === 'book') books.unshift({ title: f.name.replace(/\.[^.]+$/, ''), author: f.author, fmt: f.fmt, progress: 0, cat: '在读', chapter: '第一章', color: 'from-[#36546E] to-[#567C9E]', pages: ['已导入本地书籍。'] });
+        else mangas.unshift({ title: f.name.replace(/\.[^.]+$/, ''), author: f.author, fmt: f.fmt, unread: 12, cat: '单行本', ch: '第01话', color: 'from-[#3B4252] to-[#5E6A82]', chapters: ['第01话'], desc: '新导入本地漫画。' });
+      });
+      state.importFiles = state.importFiles.filter(f => !f.checked);
+      showToast(`已成功导入 ${selected.length} 项作品`);
+      render();
+    }
+
+    function renderWebDAV() {
+      const fc = state.floatingMode;
+      const t = state.davToggles;
+      return `
+        <div class="flex-1 flex flex-col overflow-hidden relative">
+          <div class="${fc ? 'mx-3 mt-1.5 mb-2 px-3.5 py-2 rounded-[20px] floating-card' : 'px-4 pt-2 pb-2'} flex items-center justify-between shrink-0">
+            <h2 class="text-lg font-bold tracking-tight">多端同步</h2>
+            <button onclick="showToast('WebDAV 账号与限流策略设置')" class="w-8 h-8 rounded-full flex items-center justify-center cursor-pointer" style="background: var(--p-surface-2);">${ico('gear', 16)}</button>
+          </div>
+          <div class="flex-1 overflow-y-auto hide-scrollbar px-3.5 ${fc ? 'pb-24' : 'pb-6'} space-y-3">
+            <div class="p-4 rounded-[22px] space-y-3 ${fc ? 'floating-card' : 'border'}" style="${fc?'':'background:var(--p-surface);border-color:var(--p-border);'}">
+              <div class="flex items-center gap-2.5">
+                <div class="w-9 h-9 rounded-xl flex items-center justify-center" style="background: var(--p-surface-2); color: var(--p-ok);">${ico('sync', 19)}</div>
+                <div>
+                  <div class="text-xs font-bold flex items-center gap-1.5">WebDAV 已连接 <span class="px-1.5 py-0.5 rounded-full text-[9px] text-white" style="background: var(--p-ok);">在线</span></div>
+                  <div class="text-[10px] mt-0.5" style="color: var(--p-muted);">坚果云 · /InkBox · 上次 ${state.davLastSync}</div>
+                </div>
+              </div>
+              <div class="grid grid-cols-2 gap-2">
+                <button onclick="triggerSync()" class="py-2 rounded-full text-xs font-semibold cursor-pointer flex items-center justify-center gap-1.5" style="background: var(--p-accent); color: var(--p-accent-fg);">
+                  <span class="${state.davSyncing?'spin-anim inline-flex':''}">${ico('refresh', 13)}</span>
+                  <span>${state.davSyncing?'同步中...':'立即同步'}</span>
+                </button>
+                <button onclick="state.davConflictModal=true; render();" class="py-2 rounded-full text-xs font-medium border cursor-pointer" style="border-color: var(--p-border);">模拟冲突弹窗</button>
+              </div>
+            </div>
+
+            <div class="rounded-[22px] divide-y overflow-hidden ${fc ? 'floating-card' : 'border'}" style="${fc?'':'background:var(--p-surface);border-color:var(--p-border);'}">
+              <div class="px-3.5 py-2 text-[11px] font-semibold" style="color: var(--p-muted);">V1.0 双层同步内容</div>
+              ${[
+                ['progress', '阅读进度与书签', 'Layer 1 · 秒级增量同步'],
+                ['meta', '书架分组与划线笔记', 'Layer 1 · JSON 智能合并'],
+                ['prefs', '排版与手绘主题偏好', 'Layer 1 · 字体/点击区配置'],
+                ['files', '书籍与漫画源文件', 'Layer 2 · Wi-Fi 按需上传/拉取']
+              ].map(([k, title, sub]) => `
+                <div class="px-3.5 py-2.5 flex items-center justify-between gap-2" style="border-color: var(--p-border);">
+                  <div>
+                    <div class="text-xs font-medium">${title}</div>
+                    <div class="text-[10px]" style="color: var(--p-muted);">${sub}</div>
+                  </div>
+                  <button onclick="state.davToggles['${k}']=!state.davToggles['${k}']; render();" class="w-10 h-5 rounded-full p-0.5 cursor-pointer shrink-0" style="background:${t[k]?'var(--p-accent)':'var(--p-border)'};">
+                    <div class="w-4 h-4 rounded-full bg-white transition-transform ${t[k]?'translate-x-5':''}"></div>
+                  </button>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+
+          ${state.davConflictModal ? `
+            <div class="absolute inset-0 bg-black/45 backdrop-blur-[2px] z-40 flex items-center justify-center p-4 animate-fade">
+              <div class="w-full rounded-[26px] p-4 space-y-3 floating-dock">
+                <div class="text-sm font-bold">发现多端阅读进度冲突</div>
+                <div class="text-[11px]" style="color: var(--p-muted);">《三体 II》在平板端有更新记录：</div>
+                <div class="space-y-2 text-xs">
+                  <div class="p-2.5 rounded-2xl border" style="background: var(--p-accent-soft); border-color: var(--p-accent);">
+                    <div class="font-semibold" style="color: var(--p-accent);">云端（平板端 · 5分钟前）</div>
+                    <div class="text-[11px]">第十五章 · 48.2%</div>
+                  </div>
+                  <div class="p-2.5 rounded-2xl border" style="background: var(--p-surface-2); border-color: var(--p-border);">
+                    <div class="font-semibold">本机（Android · 1小时前）</div>
+                    <div class="text-[11px]" style="color: var(--p-muted);">第十四章 · 42.6%</div>
+                  </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2 pt-1">
+                  <button onclick="state.davConflictModal=false; render();" class="py-2 rounded-full text-xs border cursor-pointer" style="border-color: var(--p-border);">保留本地</button>
+                  <button onclick="state.davConflictModal=false; books[0].progress=48; showToast('已同步云端进度 48%'); render();" class="py-2 rounded-full text-xs font-semibold cursor-pointer" style="background: var(--p-accent); color: var(--p-accent-fg);">采用云端</button>
+                </div>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function triggerSync() {
+      if (state.davSyncing) return;
+      state.davSyncing = true;
+      render();
+      setTimeout(() => {
+        state.davSyncing = false;
+        state.davLastSync = '刚刚';
+        showToast('WebDAV Layer1+Layer2 同步完成');
+        render();
+      }, 900);
+    }
+
+    function renderBottomNav(isTopLevel) {
+      const wrap = document.getElementById('bottom-nav-wrap');
+      if (!isTopLevel) { wrap.innerHTML = ''; return; }
+      const tabs = [
+        ['bookshelf', '书架'],
+        ['manga', '漫画'],
+        ['import', '导入'],
+        ['webdav', '同步']
+      ];
+      if (state.floatingMode) {
+        wrap.innerHTML = `
+          <div class="pointer-events-none absolute bottom-4 inset-x-3.5 z-30">
+            <nav class="pointer-events-auto floating-dock rounded-full px-2 py-1.5 grid grid-cols-4">
+              ${tabs.map(([id, lbl]) => {
+                const active = state.screen === id;
+                const iconId = id === 'webdav' ? 'sync' : id;
+                return `
+                  <button onclick="jumpScreen('${id}')" class="flex flex-col items-center justify-center py-1 rounded-full cursor-pointer transition"
+                    style="background:${active?'var(--p-accent-soft)':'transparent'}; color:${active?'var(--p-accent)':'var(--p-muted)'};">
+                    ${ico(iconId, 18)}
+                    <span class="text-[10px] font-medium mt-0.5">${lbl}</span>
+                  </button>
+                `;
+              }).join('')}
+            </nav>
+          </div>
+        `;
+      } else {
+        wrap.innerHTML = `
+          <nav class="h-[62px] px-2 pt-1 grid grid-cols-4 border-t" style="background: var(--p-surface); border-color: var(--p-border);">
+            ${tabs.map(([id, lbl]) => {
+              const active = state.screen === id;
+              const iconId = id === 'webdav' ? 'sync' : id;
+              return `
+                <button onclick="jumpScreen('${id}')" class="flex flex-col items-center justify-center gap-0.5 cursor-pointer"
+                  style="color:${active?'var(--p-accent)':'var(--p-muted)'};">
+                  <span class="px-3.5 py-0.5 rounded-full" style="background:${active?'var(--p-accent-soft)':'transparent'};">${ico(iconId, 18)}</span>
+                  <span class="text-[10px] font-medium">${lbl}</span>
+                </button>
+              `;
+            }).join('')}
+          </nav>
+        `;
+      }
+    }
+
+    function render() {
+      const content = document.getElementById('screen-content');
+      const statusBar = document.getElementById('status-bar');
+      const gestureBar = document.getElementById('gesture-bar');
+      const isTopLevel = ['bookshelf', 'manga', 'import', 'webdav'].includes(state.screen);
+
+      renderBottomNav(isTopLevel);
+
+      if (state.screen === 'bookReader') {
+        const th = brThemes[state.brTheme];
+        statusBar.style.background = th.bg; statusBar.style.color = th.sub;
+        gestureBar.style.background = th.bg; gestureBar.style.color = th.sub;
+      } else if (state.screen === 'mangaReader') {
+        statusBar.style.background = state.mrBg; statusBar.style.color = '#999';
+        gestureBar.style.background = state.mrBg; gestureBar.style.color = '#999';
+      } else {
+        statusBar.style.background = 'transparent'; statusBar.style.color = 'var(--p-fg)';
+        gestureBar.style.background = 'transparent'; gestureBar.style.color = 'var(--p-fg)';
+      }
+
+      if (state.screen === 'bookshelf') content.innerHTML = renderBookshelf();
+      else if (state.screen === 'manga') content.innerHTML = renderMangaShelf();
+      else if (state.screen === 'mangaDetail') content.innerHTML = renderMangaDetail();
+      else if (state.screen === 'bookReader') content.innerHTML = renderBookReader();
+      else if (state.screen === 'mangaReader') content.innerHTML = renderMangaReader();
+      else if (state.screen === 'import') content.innerHTML = renderImport();
+      else if (state.screen === 'webdav') content.innerHTML = renderWebDAV();
+
+      const s = specs[state.screen] || specs.bookshelf;
+      document.getElementById('spec-title').textContent = s.title;
+      document.getElementById('spec-desc').textContent = s.desc;
+      document.getElementById('spec-tips').innerHTML = s.tips.map(t => `<li>${t}</li>`).join('');
+    }
+
+    // Render static hand-drawn icon showcase once
+    document.getElementById('icon-showcase').innerHTML = iconGalleryItems.map(([k, lbl]) => `
+      <div class="p-2 rounded-lg bg-[var(--background)] border border-[var(--border)] flex flex-col items-center gap-1.5">
+        <span class="text-[var(--foreground)]">${ico(k, 20)}</span>
+        <span class="text-[10px] text-[var(--muted-foreground)]">${lbl}</span>
+      </div>
+    `).join('');
+
+    render();
+  </script>
+</body>
+</html>

@@ -1,0 +1,49 @@
+# Rust build artifacts
+rust_core/target/
+**/*.rs.bk
+
+# Flutter / Dart build & tool caches
+app/build/
+app/.dart_tool/
+app/.flutter-plugins-dependencies
+app/coverage/
+app/.pub-cache/
+app/.pub/
+app/**/doc/api/
+app/app.*.symbols
+app/app.*.map.json
+app/windows/flutter/ephemeral/
+app/ios/Flutter/ephemeral/
+app/macos/Flutter/ephemeral/
+
+# Android Gradle, local env, signing & prebuilt Rust JNI .so
+app/android/.gradle/
+app/android/.kotlin/
+app/android/.cxx/
+app/android/local.properties
+app/android/key.properties
+app/android/**/*.keystore
+app/android/**/*.jks
+app/android/captures/
+app/android/app/debug/
+app/android/app/profile/
+app/android/app/release/
+app/android/app/src/main/jniLibs/**/*.so
+
+# Native binaries & debug symbols
+*.dll
+*.so
+*.dylib
+*.pdb
+*.lib
+*.exp
+
+# Logs & IDE / OS files
+*.log
+*.swp
+.idea/
+*.iml
+*.ipr
+*.iws
+.DS_Store
+Thumbs.db

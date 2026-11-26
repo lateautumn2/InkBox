@@ -1,0 +1,731 @@
+package dev.inkbox.inkbox
+
+import android.app.Activity
+import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.pdf.PdfRenderer
+import android.net.Uri
+import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.os.ParcelFileDescriptor
+import android.provider.OpenableColumns
+import android.provider.Settings
+import android.speech.tts.TextToSpeech
+import android.speech.tts.UtteranceProgressListener
+import android.view.KeyEvent
+import android.view.WindowManager
+import androidx.documentfile.provider.DocumentFile
+import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.EventChannel
+import io.flutter.plugin.common.MethodChannel
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.FileInputStream
+import java.io.FileOutputStream
+import java.util.Locale
+import java.util.UUID
+import java.util.zip.ZipFile
+
+class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
+    private val methodChannelName = "dev.inkbox/platform"
+    private val eventChannelName = "dev.inkbox/events"
+
+    private val reqPickDocuments = 9001
+    private val reqPickDirectory = 9002
+    private val reqPickDocumentsDetailed = 9003
+
+    private var pendingResult: MethodChannel.Result? = null
+    private var eventSink: EventChannel.EventSink? = null
+    private var volumeKeyPagingEnabled = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+    private var ttsInitializing = false
+    private var currentTtsEngine: String = ""
+    private var pendingSpeakAction: ((Boolean) -> Unit)? = null
+    private var pendingIncomingUri: Uri? = null
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        ttsInitializing = true
+        var initSyncFired = false
+        var initSyncStatus = TextToSpeech.ERROR
+        val created = TextToSpeech(this) { status ->
+            if (tts == null) {
+                initSyncFired = true
+                initSyncStatus = status
+            } else {
+                onInit(status)
+            }
+        }
+        tts = created
+        if (initSyncFired) {
+            onInit(initSyncStatus)
+        }
+        if (intent?.action == Intent.ACTION_VIEW && intent.data != null) {
+            pendingIncomingUri = intent.data
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        if (intent.action == Intent.ACTION_VIEW && intent.data != null) {
+            stageAndEmitIncomingFile(intent.data!!)
+        }
+    }
+
+    override fun onDestroy() {
+        pendingSpeakAction = null
+        tts?.stop()
+        tts?.shutdown()
+        tts = null
+        super.onDestroy()
+    }
+
+    private fun configureTtsListener(instance: TextToSpeech?) {
+        instance?.language = Locale.CHINA
+        instance?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+            override fun onStart(utteranceId: String?) {
+                emitEvent("tts_start", mapOf("utteranceId" to (utteranceId ?: "")))
+            }
+
+            override fun onDone(utteranceId: String?) {
+                emitEvent("tts_done", mapOf("utteranceId" to (utteranceId ?: "")))
+            }
+
+            @Deprecated("Deprecated in Java")
+            override fun onError(utteranceId: String?) {
+                emitEvent("tts_error", mapOf("utteranceId" to (utteranceId ?: "")))
+            }
+        })
+    }
+
+    private fun containsCjk(text: String): Boolean {
+        for (ch in text) {
+            if (ch.code in 0x4E00..0x9FFF || ch.code in 0x3400..0x4DBF) return true
+        }
+        return false
+    }
+
+    private fun resolveTtsLocale(languageTag: String?): Locale {
+        return when (languageTag?.trim()) {
+            "zh-CN" -> Locale.CHINA
+            "zh-TW" -> Locale.TAIWAN
+            "zh-HK" -> Locale("zh", "HK")
+            "en-US" -> Locale.US
+            "ja-JP" -> Locale.JAPAN
+            "system", "", null -> Locale.getDefault()
+            else -> Locale.forLanguageTag(languageTag)
+        }
+    }
+
+    private fun clampTtsText(raw: String): String {
+        val maxLen = (TextToSpeech.getMaxSpeechInputLength() - 64).coerceAtLeast(500)
+        if (raw.length <= maxLen) return raw
+        val window = raw.substring(0, maxLen)
+        val lastStop = window.indexOfLast { it == '。' || it == '！' || it == '？' || it == '\n' || it == '.' }
+        return if (lastStop >= maxLen / 2) window.substring(0, lastStop + 1) else window
+    }
+
+    override fun onInit(status: Int) {
+        ttsInitializing = false
+        if (status == TextToSpeech.SUCCESS) {
+            ttsReady = true
+            configureTtsListener(tts)
+        } else {
+            ttsReady = false
+            currentTtsEngine = "__init_failed__"
+        }
+        val action = pendingSpeakAction
+        pendingSpeakAction = null
+        action?.invoke(ttsReady)
+    }
+
+    override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
+        super.configureFlutterEngine(flutterEngine)
+
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, eventChannelName)
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    eventSink = events
+                    pendingIncomingUri?.let {
+                        pendingIncomingUri = null
+                        stageAndEmitIncomingFile(it)
+                    }
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    eventSink = null
+                }
+            })
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannelName)
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "setKeepScreenOn" -> {
+                        val enabled = call.argument<Boolean>("enabled") ?: false
+                        if (enabled) {
+                            window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        } else {
+                            window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+                        }
+                        result.success(null)
+                    }
+
+                    "setVolumeKeyPaging" -> {
+                        volumeKeyPagingEnabled = call.argument<Boolean>("enabled") ?: false
+                        result.success(null)
+                    }
+
+                    "setScreenBrightness" -> {
+                        val brightness = call.argument<Double>("brightness")
+                        val lp = window.attributes
+                        lp.screenBrightness = brightness?.toFloat()?.coerceIn(0.01f, 1.0f)
+                            ?: WindowManager.LayoutParams.BRIGHTNESS_OVERRIDE_NONE
+                        window.attributes = lp
+                        result.success(null)
+                    }
+
+                    "pickDocuments", "pickDocumentsDetailed" -> {
+                        if (pendingResult != null) {
+                            result.error("BUSY", "Another picker is already active", null)
+                            return@setMethodCallHandler
+                        }
+                        pendingResult = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                            type = "*/*"
+                            putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
+                        }
+                        val code = if (call.method == "pickDocumentsDetailed") {
+                            reqPickDocumentsDetailed
+                        } else {
+                            reqPickDocuments
+                        }
+                        startActivityForResult(intent, code)
+                    }
+
+                    "pickPersistentDirectory" -> {
+                        if (pendingResult != null) {
+                            result.error("BUSY", "Another picker is already active", null)
+                            return@setMethodCallHandler
+                        }
+                        pendingResult = result
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                            addFlags(
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                            )
+                        }
+                        startActivityForResult(intent, reqPickDirectory)
+                    }
+
+                    "scanPersistentDirectory" -> {
+                        val treeUriStr = call.argument<String>("treeUri")
+                        if (treeUriStr.isNullOrBlank()) {
+                            result.success(emptyList<Map<String, Any>>())
+                            return@setMethodCallHandler
+                        }
+                        Thread {
+                            val items = scanTreeUri(Uri.parse(treeUriStr))
+                            mainHandler.post { result.success(items) }
+                        }.start()
+                    }
+
+                    "stageDocumentUri" -> {
+                        val uriStr = call.argument<String>("uri")
+                        val fileNameHint = call.argument<String>("fileName")
+                        if (uriStr.isNullOrBlank()) {
+                            result.error("ARG", "Missing uri", null)
+                            return@setMethodCallHandler
+                        }
+                        Thread {
+                            val outcome = copyUriToManagedLibrary(Uri.parse(uriStr), fileNameHint)
+                            mainHandler.post {
+                                if (outcome.file != null) {
+                                    result.success(outcome.file.absolutePath)
+                                } else {
+                                    result.error("IO", outcome.error ?: "Failed to copy document", null)
+                                }
+                            }
+                        }.start()
+                    }
+
+                    "speakText" -> {
+                        val rawText = call.argument<String>("text") ?: ""
+                        val text = clampTtsText(rawText)
+                        val rate = (call.argument<Double>("rate") ?: 1.0).toFloat().coerceIn(0.4f, 2.5f)
+                        val pitch = (call.argument<Double>("pitch") ?: 1.0).toFloat().coerceIn(0.5f, 2.0f)
+                        val language = call.argument<String>("language")
+                        val requestedEngine = call.argument<String>("engine")?.trim() ?: ""
+
+                        fun performSpeak(): String? {
+                            val active = tts ?: return null
+                            if (!ttsReady || text.isBlank()) return null
+                            try {
+                                val targetLocale = resolveTtsLocale(language)
+                                val avail = active.isLanguageAvailable(targetLocale)
+                                if (avail >= TextToSpeech.LANG_AVAILABLE) {
+                                    active.language = targetLocale
+                                } else if (containsCjk(text)) {
+                                    active.language = Locale.CHINA
+                                } else {
+                                    active.language = targetLocale
+                                }
+                            } catch (_: Exception) {
+                            }
+                            active.setSpeechRate(rate)
+                            active.setPitch(pitch)
+                            val uid = UUID.randomUUID().toString()
+                            val rc = active.speak(text, TextToSpeech.QUEUE_FLUSH, null, uid)
+                            return if (rc == TextToSpeech.SUCCESS) uid else null
+                        }
+
+                        // Cancel any superseded pending speak callback cleanly
+                        pendingSpeakAction?.invoke(false)
+                        pendingSpeakAction = null
+
+                        if (requestedEngine != currentTtsEngine || (!ttsReady && !ttsInitializing)) {
+                            tts?.stop()
+                            tts?.shutdown()
+                            tts = null
+                            ttsReady = false
+                            ttsInitializing = true
+                            currentTtsEngine = requestedEngine
+
+                            var responded = false
+                            fun finishWith(uid: String?) {
+                                if (responded) return
+                                responded = true
+                                mainHandler.post { result.success(uid) }
+                            }
+
+                            pendingSpeakAction = { ok ->
+                                finishWith(if (ok) performSpeak() else null)
+                            }
+
+                            var syncFired = false
+                            var syncStatus = TextToSpeech.ERROR
+                            val initCb = TextToSpeech.OnInitListener { st ->
+                                if (tts == null) {
+                                    syncFired = true
+                                    syncStatus = st
+                                } else {
+                                    onInit(st)
+                                }
+                            }
+                            val created = if (requestedEngine.isEmpty()) {
+                                TextToSpeech(this, initCb)
+                            } else {
+                                TextToSpeech(this, initCb, requestedEngine)
+                            }
+                            tts = created
+                            if (syncFired) {
+                                onInit(syncStatus)
+                            }
+                        } else if (ttsInitializing) {
+                            var responded = false
+                            pendingSpeakAction = { ok ->
+                                if (!responded) {
+                                    responded = true
+                                    mainHandler.post { result.success(if (ok) performSpeak() else null) }
+                                }
+                            }
+                        } else {
+                            result.success(performSpeak())
+                        }
+                    }
+
+                    "stopTts" -> {
+                        pendingSpeakAction?.invoke(false)
+                        pendingSpeakAction = null
+                        tts?.stop()
+                        result.success(null)
+                    }
+
+                    "getTtsEngines" -> {
+                        val list = try {
+                            tts?.engines?.map { e ->
+                                mapOf("name" to e.name, "label" to e.label)
+                            } ?: emptyList()
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                        result.success(list)
+                    }
+
+                    "openSystemTtsSettings" -> {
+                        try {
+                            startActivity(Intent("com.android.settings.TTS_SETTINGS"))
+                        } catch (_: Exception) {
+                            try {
+                                startActivity(Intent(Settings.ACTION_SETTINGS))
+                            } catch (_: Exception) {
+                            }
+                        }
+                        result.success(null)
+                    }
+
+                    "getPdfPageCount" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        Thread {
+                            val count = try {
+                                ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                    PdfRenderer(pfd).use { it.pageCount }
+                                }
+                            } catch (_: Exception) {
+                                0
+                            }
+                            mainHandler.post { result.success(count) }
+                        }.start()
+                    }
+
+                    "renderPdfPage" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        val pageIndex = call.argument<Int>("pageIndex") ?: 0
+                        val scale = (call.argument<Double>("scale") ?: 2.0).toFloat().coerceIn(0.8f, 3.5f)
+                        Thread {
+                            val pngBytes = try {
+                                ParcelFileDescriptor.open(File(path), ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                                    PdfRenderer(pfd).use { renderer ->
+                                        if (pageIndex < 0 || pageIndex >= renderer.pageCount) {
+                                            null
+                                        } else {
+                                            renderer.openPage(pageIndex).use { page ->
+                                                val w = (page.width * scale).toInt().coerceIn(64, 2400)
+                                                val h = (page.height * scale).toInt().coerceIn(64, 3400)
+                                                val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                                                Canvas(bmp).drawColor(Color.WHITE)
+                                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                                val bos = ByteArrayOutputStream()
+                                                bmp.compress(Bitmap.CompressFormat.PNG, 92, bos)
+                                                bmp.recycle()
+                                                bos.toByteArray()
+                                            }
+                                        }
+                                    }
+                                }
+                            } catch (_: Exception) {
+                                null
+                            }
+                            mainHandler.post { result.success(pngBytes) }
+                        }.start()
+                    }
+
+                    else -> result.notImplemented()
+                }
+            }
+    }
+
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (volumeKeyPagingEnabled && event.action == KeyEvent.ACTION_DOWN) {
+            if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP) {
+                emitEvent("volume_key", mapOf("direction" to "up"))
+                return true
+            } else if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
+                emitEvent("volume_key", mapOf("direction" to "down"))
+                return true
+            }
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val callback = pendingResult ?: return
+        pendingResult = null
+
+        if (resultCode != Activity.RESULT_OK || data == null) {
+            when (requestCode) {
+                reqPickDocuments -> callback.success(emptyList<String>())
+                reqPickDocumentsDetailed -> callback.success(
+                    mapOf("paths" to emptyList<String>(), "errors" to emptyList<String>())
+                )
+                else -> callback.success(null)
+            }
+            return
+        }
+
+        when (requestCode) {
+            reqPickDocuments, reqPickDocumentsDetailed -> {
+                val uris = LinkedHashSet<Uri>()
+                val clip = data.clipData
+                if (clip != null && clip.itemCount > 0) {
+                    for (i in 0 until clip.itemCount) {
+                        clip.getItemAt(i)?.uri?.let { uris.add(it) }
+                    }
+                } else {
+                    data.data?.let { uris.add(it) }
+                }
+
+                Thread {
+                    val paths = mutableListOf<String>()
+                    val errors = mutableListOf<String>()
+                    for (uri in uris) {
+                        val outcome = copyUriToManagedLibrary(uri, null)
+                        if (outcome.file != null) {
+                            paths.add(outcome.file.absolutePath)
+                        } else {
+                            errors.add(outcome.error ?: "无法读取所选文件 ($uri)")
+                        }
+                    }
+                    mainHandler.post {
+                        if (requestCode == reqPickDocumentsDetailed) {
+                            callback.success(mapOf("paths" to paths, "errors" to errors))
+                        } else {
+                            callback.success(paths)
+                        }
+                    }
+                }.start()
+            }
+
+            reqPickDirectory -> {
+                val treeUri = data.data
+                if (treeUri != null) {
+                    try {
+                        contentResolver.takePersistableUriPermission(
+                            treeUri,
+                            Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        )
+                    } catch (_: SecurityException) {
+                        // Persistable flag not always granted on legacy providers
+                    }
+                    val doc = DocumentFile.fromTreeUri(this, treeUri)
+                    callback.success(
+                        mapOf(
+                            "uri" to treeUri.toString(),
+                            "name" to (doc?.name ?: treeUri.lastPathSegment ?: "本地目录")
+                        )
+                    )
+                } else {
+                    callback.success(null)
+                }
+            }
+        }
+    }
+
+    private data class StagedCopyResult(val file: File?, val error: String? = null)
+
+    private fun stageAndEmitIncomingFile(uri: Uri) {
+        Thread {
+            val outcome = copyUriToManagedLibrary(uri, null)
+            if (outcome.file != null) {
+                emitEvent("open_file", mapOf("path" to outcome.file.absolutePath, "name" to outcome.file.name))
+            }
+        }.start()
+    }
+
+    private fun copyUriToManagedLibrary(uri: Uri, nameHint: String?): StagedCopyResult {
+        val importDir = File(filesDir, "library_imports").apply { mkdirs() }
+        val tmpFile = File(importDir, ".staging_${UUID.randomUUID()}.tmp")
+        return try {
+            val rawName = sequenceOf(nameHint, queryDisplayName(uri))
+                .mapNotNull { it?.trim() }
+                .firstOrNull { it.isNotEmpty() }
+                ?: "import_${System.currentTimeMillis()}"
+
+            // Strip any SAF document path prefixes like "primary:Download/book.epub"
+            val decodedName = Uri.decode(rawName)
+                .substringAfterLast('/')
+                .substringAfterLast('\\')
+                .substringAfterLast(':')
+                .trim()
+                .ifEmpty { "import_${System.currentTimeMillis()}" }
+
+            // Copy stream into staging temp file first (with ParcelFileDescriptor fallback)
+            var bytesCopied = 0L
+            val stream = try {
+                contentResolver.openInputStream(uri)
+            } catch (_: Exception) {
+                null
+            }
+            if (stream != null) {
+                stream.use { input ->
+                    FileOutputStream(tmpFile).use { output ->
+                        bytesCopied = input.copyTo(output, 64 * 1024)
+                        output.flush()
+                    }
+                }
+            } else {
+                contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                    FileInputStream(pfd.fileDescriptor).use { input ->
+                        FileOutputStream(tmpFile).use { output ->
+                            bytesCopied = input.copyTo(output, 64 * 1024)
+                            output.flush()
+                        }
+                    }
+                } ?: return StagedCopyResult(null, "$decodedName: 无法打开文件流，请检查存储权限或确认文件已在本地")
+            }
+
+            if (bytesCopied <= 0L || !tmpFile.exists() || tmpFile.length() <= 0L) {
+                tmpFile.delete()
+                return StagedCopyResult(null, "$decodedName: 文件内容为空 (0 字节)，若为云盘占位文件请先下载到本地")
+            }
+
+            // Ensure a known file extension (fallback to MIME type or magic bytes)
+            val knownExts = setOf("epub", "txt", "pdf", "mobi", "azw3", "fb2", "md", "cbz", "zip", "cbr", "rar", "cb7", "7z", "json")
+            var safeName = decodedName.replace(Regex("[\\\\/:*?\"<>|]"), "_").trim()
+            val curExt = safeName.substringAfterLast('.', "").lowercase(Locale.ROOT)
+            if (curExt !in knownExts) {
+                val inferred = inferExtensionFromMime(contentResolver.getType(uri))
+                    ?: sniffExtensionFromFile(tmpFile)
+                if (inferred != null) {
+                    safeName = "$safeName.$inferred"
+                }
+            }
+
+            // Avoid clobbering an existing managed file with the same display name
+            var target = File(importDir, safeName)
+            if (target.exists()) {
+                val dot = safeName.lastIndexOf('.')
+                val stem = if (dot > 0) safeName.substring(0, dot) else safeName
+                val extPart = if (dot > 0) safeName.substring(dot) else ""
+                val uniqueTag = UUID.randomUUID().toString().substring(0, 6)
+                target = File(importDir, "${stem}_$uniqueTag$extPart")
+            }
+
+            if (!tmpFile.renameTo(target)) {
+                tmpFile.copyTo(target, overwrite = true)
+                tmpFile.delete()
+            }
+            StagedCopyResult(target)
+        } catch (e: Exception) {
+            tmpFile.delete()
+            StagedCopyResult(null, "文件复制失败: ${e.message ?: e.javaClass.simpleName}")
+        }
+    }
+
+    private fun inferExtensionFromMime(mime: String?): String? {
+        return when (mime?.lowercase(Locale.ROOT)?.substringBefore(';')?.trim()) {
+            "application/epub+zip" -> "epub"
+            "application/pdf" -> "pdf"
+            "text/plain" -> "txt"
+            "text/markdown", "text/x-markdown" -> "md"
+            "application/x-mobipocket-ebook", "application/vnd.amazon.ebook" -> "mobi"
+            "application/x-fictionbook+xml", "application/x-fictionbook" -> "fb2"
+            "application/x-cbz", "application/vnd.comicbook+zip" -> "cbz"
+            "application/zip" -> "zip"
+            "application/x-cbr", "application/vnd.comicbook-rar", "application/x-rar-compressed" -> "cbr"
+            "application/x-cb7", "application/x-7z-compressed" -> "cb7"
+            "application/json", "text/json" -> "json"
+            else -> null
+        }
+    }
+
+    private fun sniffExtensionFromFile(file: File): String? {
+        val header = ByteArray(128)
+        val n = try {
+            FileInputStream(file).use { it.read(header) }
+        } catch (_: Exception) {
+            return null
+        }
+        if (n < 4) return "txt"
+        // %PDF-
+        if (header[0] == 0x25.toByte() && header[1] == 0x50.toByte() &&
+            header[2] == 0x44.toByte() && header[3] == 0x46.toByte()
+        ) {
+            return "pdf"
+        }
+        // ZIP-based: EPUB vs CBZ/ZIP
+        if (header[0] == 0x50.toByte() && header[1] == 0x4B.toByte() &&
+            (header[2] == 0x03.toByte() || header[2] == 0x05.toByte())
+        ) {
+            val isEpub = try {
+                ZipFile(file).use { zf ->
+                    zf.getEntry("META-INF/container.xml") != null || zf.getEntry("mimetype") != null
+                }
+            } catch (_: Exception) {
+                false
+            }
+            return if (isEpub) "epub" else "cbz"
+        }
+        // 7z
+        if (n >= 6 && header[0] == 0x37.toByte() && header[1] == 0x7A.toByte() &&
+            header[2] == 0xBC.toByte() && header[3] == 0xAF.toByte()
+        ) {
+            return "cb7"
+        }
+        // RAR
+        if (header[0] == 0x52.toByte() && header[1] == 0x61.toByte() &&
+            header[2] == 0x72.toByte() && header[3] == 0x21.toByte()
+        ) {
+            return "cbr"
+        }
+        // MOBI ("BOOKMOBI" at offset 60)
+        if (n >= 68) {
+            val magic = String(header, 60, 8, Charsets.US_ASCII)
+            if (magic == "BOOKMOBI" || magic == "TEXtREAd") return "mobi"
+        }
+        // FB2 XML
+        val headText = String(header, 0, n, Charsets.UTF_8)
+        if (headText.contains("<FictionBook", ignoreCase = true)) return "fb2"
+        return "txt"
+    }
+
+    private fun queryDisplayName(uri: Uri): String? {
+        try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val idx = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    if (idx >= 0) {
+                        val name = c.getString(idx)
+                        if (!name.isNullOrBlank()) return name
+                    }
+                }
+            }
+        } catch (_: Exception) {
+            // Fall through to DocumentFile / lastPathSegment
+        }
+        try {
+            val docName = DocumentFile.fromSingleUri(this, uri)?.name
+            if (!docName.isNullOrBlank()) return docName
+        } catch (_: Exception) {
+            // Fall through
+        }
+        return uri.lastPathSegment
+    }
+
+    private fun scanTreeUri(treeUri: Uri): List<Map<String, Any>> {
+        val root = DocumentFile.fromTreeUri(this, treeUri) ?: return emptyList()
+        val allowed = setOf("epub", "txt", "pdf", "mobi", "azw3", "fb2", "md", "cbz", "zip", "cbr", "rar", "cb7", "7z")
+        val results = mutableListOf<Map<String, Any>>()
+
+        fun walk(dir: DocumentFile, depth: Int) {
+            if (depth > 4) return
+            for (child in dir.listFiles()) {
+                val name = child.name ?: continue
+                if (name.startsWith(".")) continue
+                if (child.isDirectory) {
+                    walk(child, depth + 1)
+                } else if (child.isFile) {
+                    val ext = name.substringAfterLast('.', "").lowercase(Locale.ROOT)
+                    if (ext in allowed) {
+                        results.add(
+                            mapOf(
+                                "uri" to child.uri.toString(),
+                                "name" to name,
+                                "ext" to ext,
+                                "size" to child.length()
+                            )
+                        )
+                    }
+                }
+            }
+        }
+        walk(root, 0)
+        return results
+    }
+
+    private fun emitEvent(type: String, payload: Map<String, Any>) {
+        mainHandler.post {
+            eventSink?.success(mapOf("type" to type, "payload" to payload))
+        }
+    }
+}
