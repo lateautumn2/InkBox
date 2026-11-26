@@ -1,0 +1,912 @@
+{
+  "@@locale": "zh",
+  "appName": "墨匣 InkBox",
+  "navBooks": "书架",
+  "navManga": "漫画",
+  "navImport": "导入",
+  "navMe": "我的",
+  "cancel": "取消",
+  "confirm": "确定",
+  "save": "保存",
+  "create": "创建",
+  "delete": "删除",
+  "confirmDelete": "确认删除",
+  "edit": "编辑",
+  "rename": "重命名",
+  "close": "关闭",
+  "reset": "重置",
+  "search": "搜索",
+  "refresh": "刷新",
+  "copy": "复制",
+  "restore": "恢复",
+  "open": "打开",
+  "retry": "重试",
+  "clear": "清空",
+  "details": "详情",
+  "none": "无",
+  "loading": "加载中...",
+  "shelfGroupAll": "全部",
+  "shelfGroupReading": "在读",
+  "shelfGroupFinished": "已读完",
+  "defaultBookshelf": "默认书架",
+  "defaultMangaShelf": "默认漫画架",
+  "unknownAuthor": "未知作者",
+  "readyToRead": "准备阅读",
+  "shelvesCountBadge": "{count}架",
+  "@shelvesCountBadge": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "selectedCountBooks": "已选 {count} 本",
+  "@selectedCountBooks": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "selectedCountManga": "已选 {count} 部",
+  "@selectedCountManga": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "sortBy": "排序方式",
+  "sortLastRead": "按最近阅读",
+  "sortAddedAt": "按添加时间",
+  "sortTitle": "按书名",
+  "sortProgress": "按阅读进度",
+  "gridView": "网格视图",
+  "listView": "列表视图",
+  "searchBooks": "搜索书籍",
+  "searchBooksHint": "搜索书名或作者...",
+  "searchManga": "搜索漫画",
+  "searchMangaHint": "搜索漫画名或作者...",
+  "continueReading": "继续阅读",
+  "emptyLibraryBooks": "书架还是空的，导入你的第一本书吧",
+  "emptyShelfBooks": "「{shelfName}」暂无书籍",
+  "@emptyShelfBooks": {
+    "placeholders": {
+      "shelfName": { "type": "String" }
+    }
+  },
+  "emptyGroupBooks": "当前分组暂无书籍",
+  "importLocalBooks": "导入本地书籍",
+  "switchOtherShelf": "切换书架",
+  "emptyLibraryManga": "漫画架还是空的，前往导入添加吧",
+  "emptyShelfManga": "「{shelfName}」暂无漫画",
+  "@emptyShelfManga": {
+    "placeholders": {
+      "shelfName": { "type": "String" }
+    }
+  },
+  "emptyGroupManga": "当前分组暂无漫画",
+  "importLocalManga": "导入本地漫画",
+  "bookshelfLoadError": "书架加载失败：{error}",
+  "@bookshelfLoadError": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "mangaShelfLoadError": "漫画架加载失败：{error}",
+  "@mangaShelfLoadError": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "moveShelf": "移架",
+  "markFinished": "标为读完",
+  "markReading": "标为在读",
+  "removeBooks": "移除",
+  "markAllRead": "标为已读",
+  "resetUnread": "标为未读",
+  "removeManga": "移除",
+  "moveBookSuccess": "已将 {count} 本书移至「{target}」",
+  "@moveBookSuccess": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "target": { "type": "String" }
+    }
+  },
+  "moveMangaSuccess": "已将 {count} 部漫画移至「{target}」",
+  "@moveMangaSuccess": {
+    "placeholders": {
+      "count": { "type": "int" },
+      "target": { "type": "String" }
+    }
+  },
+  "removeBooksTitle": "移除选中的 {count} 本书籍",
+  "@removeBooksTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "removeMangaTitle": "移除选中的 {count} 部漫画",
+  "@removeMangaTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "removeBookTitleSingle": "移除《{title}》",
+  "@removeBookTitleSingle": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "removeArchiveOption": "移出书架（保留导入历史）",
+  "removeArchiveMangaOption": "移出漫画架（保留导入历史）",
+  "removePermanentOption": "彻底删除",
+  "archivedBooksToast": "已移出 {count} 本书",
+  "@archivedBooksToast": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "deletedBooksToast": "已彻底删除 {count} 本书",
+  "@deletedBooksToast": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "bookDetailsTitle": "书籍详情",
+  "mangaDetailsTitle": "漫画详情",
+  "notFoundBook": "未找到该书籍",
+  "notFoundManga": "未找到该漫画",
+  "movedShelfSuccess": "已修改所属书架",
+  "pinToShelf": "置顶",
+  "unpinFromShelf": "取消置顶",
+  "editMetadata": "编辑信息",
+  "bookTitleLabel": "书名",
+  "authorLabel": "作者",
+  "shelfBelongsTo": "所属书架",
+  "orCreateShelf": "或新建书架",
+  "readingStatusLabel": "阅读状态",
+  "readingMinutesShort": "{mins} 分钟",
+  "@readingMinutesShort": {
+    "placeholders": {
+      "mins": { "type": "int" }
+    }
+  },
+  "readProgressShort": "已读 {pct}%",
+  "@readProgressShort": {
+    "placeholders": {
+      "pct": { "type": "String" }
+    }
+  },
+  "tocChaptersCount": "章节目录 ({count})",
+  "@tocChaptersCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "ascendingOrder": "正序",
+  "descendingOrder": "倒序",
+  "fullToc": "全部目录",
+  "expandFullToc": "查看全部 {count} 章",
+  "@expandFullToc": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "noTocFound": "未解析到目录章节",
+  "currentReadingTag": "当前",
+  "txtRuleEncodingMeta": "规则：{rule} · 编码：{encoding}",
+  "@txtRuleEncodingMeta": {
+    "placeholders": {
+      "rule": { "type": "String" },
+      "encoding": { "type": "String" }
+    }
+  },
+  "smartAutoDetect": "自动识别",
+  "switchTocRule": "目录规则",
+  "switchEncoding": "文本编码",
+  "manageRuleLibrary": "规则库",
+  "selectTocRuleTitle": "选择目录识别规则",
+  "autoDetectRecommended": "智能自动识别",
+  "ruleUnmatchedTag": "{name}（未匹配）",
+  "@ruleUnmatchedTag": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "tocReloadedCount": "已更新目录（{count} 章）",
+  "@tocReloadedCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "tocNoMatchFallback": "未匹配到章节，已按默认分段（{count} 节）",
+  "@tocNoMatchFallback": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "selectEncodingTitle": "选择文本编码",
+  "encodingAuto": "自动检测",
+  "encodingGb18030": "GB18030 / GBK",
+  "encodingBig5": "Big5",
+  "encodingSwitched": "已切换编码：{encoding}",
+  "@encodingSwitched": {
+    "placeholders": {
+      "encoding": { "type": "String" }
+    }
+  },
+  "annotationsTitle": "书签与划线",
+  "noAnnotationsHint": "暂无书签或划线笔记",
+  "bookmarkTag": "书签",
+  "highlightNoteTag": "想法",
+  "highlightTag": "划线",
+  "chapterLabelShort": "第 {index} 章",
+  "@chapterLabelShort": {
+    "placeholders": {
+      "index": { "type": "int" }
+    }
+  },
+  "localFileInfo": "本地文件",
+  "pathLabel": "路径：{path}",
+  "@pathLabel": {
+    "placeholders": {
+      "path": { "type": "String" }
+    }
+  },
+  "fingerprintLabel": "指纹：{hash}",
+  "@fingerprintLabel": {
+    "placeholders": {
+      "hash": { "type": "String" }
+    }
+  },
+  "searchChapterHint": "搜索章节...",
+  "noMatchingChapters": "未找到匹配章节",
+  "mangaDefaultModeLabel": "阅读方向",
+  "smartCropLabel": "智能白边裁切",
+  "splitWidePagesLabel": "跨页自动切分",
+  "chaptersVolumeList": "章节列表 ({count})",
+  "@chaptersVolumeList": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "unreadOnly": "仅未读",
+  "unreadOnlyActive": "仅未读 ✓",
+  "noChaptersMatchHint": "当前筛选下无章节",
+  "startReading": "开始阅读",
+  "readLabel": "已读",
+  "pageOfTotalUnknown": "第 {current}/{total} 页",
+  "@pageOfTotalUnknown": {
+    "placeholders": {
+      "current": { "type": "int" },
+      "total": { "type": "String" }
+    }
+  },
+  "markAllReadMenu": "全部标记已读",
+  "resetUnreadMenu": "全部重置未读",
+  "moveMangaShelfMenu": "修改所属漫画架",
+  "shelfNameExists": "名称已存在",
+  "shelfRenameConflict": "名称未变更或已存在",
+  "deleteShelfTitle": "删除「{name}」",
+  "@deleteShelfTitle": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "deleteShelfConfirm": "作品将移入「{fallback}」，本地文件保留。",
+  "@deleteShelfConfirm": {
+    "placeholders": {
+      "fallback": { "type": "String" }
+    }
+  },
+  "createShelfTitle": "新建书架",
+  "createMangaShelfTitle": "新建漫画架",
+  "renameShelfTitle": "重命名书架",
+  "renameMangaShelfTitle": "重命名漫画架",
+  "shelfNameLabel": "名称",
+  "newNameLabel": "新名称",
+  "switchBookshelfTitle": "切换书架",
+  "switchMangaShelfTitle": "切换漫画架",
+  "multiShelfManagerTitle": "书架与漫画架",
+  "bookshelfTab": "书架",
+  "mangaShelfTab": "漫画架",
+  "defaultShelfBadge": "默认",
+  "shelfItemCountBook": "{count} 本",
+  "@shelfItemCountBook": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "shelfItemCountManga": "{count} 部",
+  "@shelfItemCountManga": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "inUseLabel": "当前",
+  "moveToShelfTitleBook": "移至书架",
+  "moveToShelfTitleManga": "移至漫画架",
+  "orCreateAndMoveBook": "或新建书架并移入",
+  "orCreateAndMoveManga": "或新建漫画架并移入",
+  "shelfExampleBook": "例如：历史、随笔",
+  "shelfExampleManga": "例如：连载、完结",
+  "mineTitle": "我的",
+  "appearanceSettings": "外观与主题",
+  "themePresets": "主题预设",
+  "uiStyleLabel": "界面风格",
+  "uiStyleFloating": "悬浮卡片",
+  "uiStyleClassic": "经典贴边",
+  "colorThemeLabel": "色彩模式",
+  "themeCrispLight": "澄白日间",
+  "themeDarkTheater": "暗夜剧场",
+  "themeOledBlack": "OLED 纯黑",
+  "themeFollowSystem": "跟随系统",
+  "dynamicColorTitle": "Material You 取色",
+  "dynamicColorSubtitle": "跟随系统壁纸强调色",
+  "appLanguageTitle": "语言 / Language",
+  "languageSystem": "跟随系统",
+  "languageZh": "简体中文",
+  "languageEn": "English",
+  "languageJa": "日本語",
+  "statBooks": "藏书",
+  "statReading": "在读",
+  "statFinished": "读完",
+  "statMinutes": "分钟",
+  "sectionAppearanceLanguage": "外观与语言",
+  "sectionReadingSync": "阅读与同步",
+  "multiShelfManagerMenu": "多书架管理",
+  "multiShelfSummary": "书架 {books} · 漫画架 {manga}",
+  "@multiShelfSummary": {
+    "placeholders": {
+      "books": { "type": "int" },
+      "manga": { "type": "int" }
+    }
+  },
+  "ttsMenuTitle": "TTS 语音朗读",
+  "ttsMenuSummaryLocal": "系统引擎 · {rate}x",
+  "@ttsMenuSummaryLocal": {
+    "placeholders": {
+      "rate": { "type": "String" }
+    }
+  },
+  "ttsMenuSummaryOnline": "在线语音 · {name} · {rate}x",
+  "@ttsMenuSummaryOnline": {
+    "placeholders": {
+      "name": { "type": "String" },
+      "rate": { "type": "String" }
+    }
+  },
+  "tocRulesMenuTitle": "TXT 目录规则",
+  "tocRulesMenuSummary": "{enabled} / {total} 启用",
+  "@tocRulesMenuSummary": {
+    "placeholders": {
+      "enabled": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "webdavMenuTitle": "WebDAV 同步",
+  "webdavUnconfigured": "未配置",
+  "importHubTitle": "导入中心",
+  "rescanFolders": "重新扫描",
+  "supportedFormats": "支持格式",
+  "supportedFormatsBooks": "书籍：{formats}",
+  "@supportedFormatsBooks": {
+    "placeholders": {
+      "formats": { "type": "String" }
+    }
+  },
+  "supportedFormatsManga": "漫画：{formats}",
+  "@supportedFormatsManga": {
+    "placeholders": {
+      "formats": { "type": "String" }
+    }
+  },
+  "supportedFormatsImageFolder": "图片文件夹",
+  "pickLocalFiles": "选择本地文件",
+  "addAndScanFolder": "扫描本地目录",
+  "importOptions": "导入选项",
+  "smartAutoClassify": "智能分拣书漫",
+  "overwriteDuplicates": "覆盖已存在文件",
+  "watchedFoldersTitle": "监听目录 ({count})",
+  "@watchedFoldersTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "formatAll": "全部",
+  "formatComicArchive": "漫画",
+  "importHistoryTitle": "导入历史 ({count})",
+  "@importHistoryTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "historyAll": "全部",
+  "historyArchived": "已移出",
+  "historyOnShelf": "在架",
+  "noImportHistory": "暂无导入历史，支持 EPUB / TXT / PDF / MOBI / AZW3 / FB2 / MD / CBZ / CB7",
+  "noMatchingHistory": "当前筛选下无记录",
+  "fileMissingBadge": "缺失",
+  "archivedBadge": "已移出",
+  "onShelfBadge": "在架",
+  "restoreToShelf": "入架",
+  "readNow": "阅读",
+  "permanentDeleteTitle": "彻底删除",
+  "permanentDeleteConfirm": "确定彻底删除《{title}》？将清除记录与本地缓存，无法恢复。",
+  "@permanentDeleteConfirm": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "deletedForeverToast": "已彻底删除《{title}》",
+  "@deletedForeverToast": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "fileMissingReimportToast": "《{title}》文件不存在，请重新导入",
+  "@fileMissingReimportToast": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "restoredToShelfToast": "已恢复《{title}》到书架",
+  "@restoredToShelfToast": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "folderScanDoneToast": "扫描完成：发现 {count} 个文件",
+  "@folderScanDoneToast": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "importResultSummary": "导入完成：书籍 +{books}，漫画 +{manga}",
+  "@importResultSummary": {
+    "placeholders": {
+      "books": { "type": "int" },
+      "manga": { "type": "int" }
+    }
+  },
+  "importResultSkipped": "，重复 {count}",
+  "@importResultSkipped": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "importResultFailed": "，失败 {count}",
+  "@importResultFailed": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "viewBookshelf": "查看书架",
+  "viewMangaShelf": "查看漫画",
+  "lastImportResultTitle": "导入结果",
+  "collapseLabel": "收起",
+  "importedStatus": "已入架：《{title}》",
+  "@importedStatus": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "repairedStatus": "已更新：《{title}》",
+  "@repairedStatus": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "duplicateStatus": "已在架：《{title}》",
+  "@duplicateStatus": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "overwriteReimport": "覆盖",
+  "overwriteSuccessToast": "已覆盖更新《{title}》",
+  "@overwriteSuccessToast": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "overwriteFailedToast": "覆盖失败：{error}",
+  "@overwriteFailedToast": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "selectedCandidatesCount": "已选 {count} 项",
+  "@selectedCandidatesCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "importToShelfCount": "导入 ({count})",
+  "@importToShelfCount": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "switchToBook": "改书",
+  "switchToComic": "改漫",
+  "classifiedAsBook": "书籍",
+  "classifiedAsComic": "漫画",
+  "historyBookSubtitle": "{author} · {pct}%",
+  "@historyBookSubtitle": {
+    "placeholders": {
+      "author": { "type": "String" },
+      "pct": { "type": "int" }
+    }
+  },
+  "historyMangaSubtitle": "{author} · {chapters} 话",
+  "@historyMangaSubtitle": {
+    "placeholders": {
+      "author": { "type": "String" },
+      "chapters": { "type": "int" }
+    }
+  },
+  "emptyChapterPlaceholder": "（本章节暂无正文内容）",
+  "firstPageToast": "已是第一页",
+  "lastPageToast": "已是最后一页",
+  "chapterFinishedToast": "本话已读完",
+  "bookmarkAddedToast": "已添加书签",
+  "bookmarkRemovedToast": "已取消书签",
+  "addBookmarkTooltip": "添加书签",
+  "removeBookmarkTooltip": "取消书签",
+  "highlightNotesTooltip": "划线笔记",
+  "ttsListenTooltip": "听书",
+  "originalPdf": "原版 PDF",
+  "textReflow": "文本重排",
+  "prevChapter": "上一章",
+  "nextChapter": "下一章",
+  "readerTabToc": "目录",
+  "readerTabDark": "夜间",
+  "readerTabLight": "日间",
+  "readerTabStyle": "排版",
+  "readerTabTurn": "翻页",
+  "readerTabMore": "更多",
+  "paperWhite": "素白",
+  "paperIvory": "轻象牙",
+  "paperSage": "青瓷",
+  "paperDark": "墨灰夜",
+  "paperOled": "纯黑夜",
+  "turnSimulation": "仿真",
+  "turnCover": "覆盖",
+  "turnSlide": "滑动",
+  "turnScroll": "滚动",
+  "layoutModeLabel": "版面",
+  "layoutAuto": "自适应",
+  "layoutSingle": "单页",
+  "layoutDual": "双页",
+  "fontSizeLabel": "字号",
+  "lineHeightLabel": "行距",
+  "paragraphSpacingLabel": "段距",
+  "firstLineIndentLabel": "首行缩进",
+  "chineseOriginal": "原字",
+  "chineseTrad": "繁體",
+  "chineseSimp": "简体",
+  "tapZoneLabel": "点击区",
+  "tapZoneStandard": "常规左右",
+  "tapZoneLeftHand": "左手单手",
+  "tapZoneRightHand": "右手单手",
+  "tapZoneCustom": "自定义",
+  "autoScrollLabel": "自动滚屏",
+  "startAutoScroll": "开启",
+  "stopAutoScroll": "停止",
+  "autoScrollReachedEnd": "已滚屏至末尾",
+  "volumeKeyPaging": "音量键翻页",
+  "keepScreenOn": "保持常亮",
+  "edgeBrightnessGesture": "边缘滑动调亮度",
+  "brightnessIndicator": "亮度 {pct}%",
+  "@brightnessIndicator": {
+    "placeholders": {
+      "pct": { "type": "int" }
+    }
+  },
+  "ttsSettingsBtn": "TTS 设置",
+  "purificationBtn": "正文净化",
+  "exportNotesBtn": "导出笔记",
+  "exportNotesSuccess": "已复制 {count} 条笔记到剪贴板",
+  "@exportNotesSuccess": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "purificationDialogTitle": "添加正文净化规则",
+  "purificationPatternLabel": "过滤文本或正则",
+  "purificationPatternHint": "例如：请收藏本站.*",
+  "purificationReplacementLabel": "替换为（留空删除）",
+  "purificationReplacementHint": "留空即删除",
+  "addAndApply": "添加",
+  "highlightAction": "划线",
+  "writeNoteAction": "写想法",
+  "editNoteAction": "改想法",
+  "deleteHighlightAction": "删除划线",
+  "highlightSavedToast": "已添加划线",
+  "noteSavedToast": "已保存想法",
+  "highlightDeletedToast": "已删除划线",
+  "copiedToast": "已复制",
+  "addNoteTitle": "添加想法",
+  "editNoteTitle": "编辑想法",
+  "yourNoteLabel": "想法内容",
+  "yourNoteHint": "写下此刻批注...",
+  "saveHighlightNote": "保存",
+  "pdfBitmapNoHighlightToast": "原版 PDF 暂不支持划线，请先切换文本重排",
+  "noHighlightableTextToast": "当前页面无可划线文本",
+  "pdfUnsupportedPlatform": "当前平台不支持 PDF 位图渲染，请切换文本重排",
+  "scrollModeLabel": "第 {cur}/{total} 章 · 滚动",
+  "@scrollModeLabel": {
+    "placeholders": {
+      "cur": { "type": "int" },
+      "total": { "type": "int" }
+    }
+  },
+  "tocTabTitle": "目录 ({count})",
+  "@tocTabTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "annotationsTabTitle": "书签/划线 ({count})",
+  "@annotationsTabTitle": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "noAnnotationsReaderHint": "暂无书签与划线",
+  "endOfChapterHint": "本章完",
+  "nextChapterHint": "下一章：{title}",
+  "@nextChapterHint": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "notePrefix": "想法：{note}",
+  "@notePrefix": {
+    "placeholders": {
+      "note": { "type": "String" }
+    }
+  },
+  "mangaReadingModeRtl": "从右到左",
+  "mangaReadingModeLtr": "从左到右",
+  "mangaReadingModeWebtoon": "条漫滚动",
+  "mangaReadingModeDual": "双页拼接",
+  "mangaScaleFitScreen": "适应屏幕",
+  "mangaScaleFitWidth": "适应宽度",
+  "mangaScaleFitHeight": "适应高度",
+  "mangaScaleOriginal": "原始尺寸",
+  "mangaTapLShaped": "L型单手",
+  "mangaTapEdge": "左右边缘",
+  "mangaTapKindle": "Kindle",
+  "mangaTapDisabled": "仅滑动",
+  "mangaBgBlack": "纯黑",
+  "mangaBgDarkGrey": "深灰",
+  "mangaBgCoolGrey": "冷灰",
+  "mangaBgWhite": "纯白",
+  "mangaTabMode": "阅读模式",
+  "mangaTabFilter": "图像滤镜",
+  "mangaTabGeneral": "常规",
+  "mangaAutoDualLandscape": "横屏自动双页",
+  "mangaCoverAlone": "封面首页独立单页",
+  "mangaAutoCrop": "智能白边裁切",
+  "mangaWarmFilter": "夜间暖色护眼",
+  "mangaGrayscaleFilter": "黑白对比增强",
+  "mangaDimmerLabel": "暗室调光",
+  "mangaCanvasBgLabel": "画布底色",
+  "mangaTapLayoutLabel": "点击翻页布局",
+  "mangaShowPageBadge": "显示底角页码",
+  "mangaNoImagesInChapter": "该章节暂无图片",
+  "mangaDecodeFailed": "页面解码失败",
+  "mangaToggleCropTooltip": "智能裁边",
+  "mangaToggleSettingsTooltip": "阅读设置",
+  "ttsSettingsTitle": "TTS 语音设置",
+  "ttsResetToast": "已恢复默认配置",
+  "ttsModeLocal": "系统 TTS",
+  "ttsModeOnline": "在线 TTS",
+  "ttsSpeechRate": "语速",
+  "ttsSpeechPitch": "音调",
+  "ttsPitchLow": "低沉 0.8",
+  "ttsPitchNormal": "标准 1.0",
+  "ttsPitchHigh": "清亮 1.2",
+  "ttsAutoTurnPage": "自动翻页续读",
+  "ttsSleepTimer": "定时关闭",
+  "ttsTimerOff": "不限",
+  "ttsTimerMinutes": "{mins} 分钟",
+  "@ttsTimerMinutes": {
+    "placeholders": {
+      "mins": { "type": "int" }
+    }
+  },
+  "ttsTimerChapterEnd": "播完本章",
+  "ttsEngineLabel": "系统引擎",
+  "ttsSystemDefaultEngine": "系统默认引擎",
+  "ttsLanguageLabel": "朗读语种",
+  "ttsLangSystem": "跟随系统",
+  "ttsLangZhCn": "中文（普通话）",
+  "ttsLangZhTw": "中文（台湾）",
+  "ttsLangZhHk": "中文（粤语）",
+  "ttsLangEnUs": "English (US)",
+  "ttsLangJaJp": "日本語",
+  "ttsVoiceLabel": "发音人",
+  "ttsVoiceDefault": "跟随引擎默认",
+  "ttsVoiceOffline": "离线",
+  "ttsVoiceNetwork": "联网",
+  "ttsRefreshEngines": "刷新引擎列表",
+  "ttsPreviewBtn": "试听效果",
+  "ttsStopPreviewBtn": "停止试听",
+  "ttsOpenSystemSettings": "打开系统 TTS 设置",
+  "ttsNewProfile": "新建方案",
+  "ttsEditProfile": "编辑方案",
+  "ttsDeleteProfile": "删除方案",
+  "ttsImportLegado": "导入 Legado JSON",
+  "ttsProviderEdge": "Edge TTS",
+  "ttsProviderOpenAi": "OpenAI 兼容",
+  "ttsProviderCustomHttp": "自定义 HTTP",
+  "ttsProfileNameLabel": "方案名称",
+  "ttsEdgeModeLabel": "连接方式",
+  "ttsEdgeDirect": "内置直连 (Beta)",
+  "ttsEdgeGateway": "自部署网关",
+  "ttsEndpointLabel": "接口地址 (URL)",
+  "ttsApiKeyLabel": "API 密钥（安全加密存储）",
+  "ttsApiKeyHint": "选填，部分自建服务无需密钥",
+  "ttsModelLabel": "模型",
+  "ttsVoiceIdLabel": "音色 / Voice ID",
+  "ttsFormatLabel": "音频格式",
+  "ttsHttpMethodLabel": "请求方法",
+  "ttsHeadersJsonLabel": "Headers (JSON)",
+  "ttsBodyTemplateLabel": "Body 模板",
+  "ttsTemplateHint": "支持变量：'{{text}}' '{{textEncoded}}' '{{voice}}' '{{rate}}' '{{ratePct}}' '{{pitch}}' '{{speakSpeed}}'",
+  "ttsTestAndPreview": "测试连通并试听",
+  "ttsTestingConnection": "测试中...",
+  "ttsTestConnected": "已连通 · {ms} ms",
+  "@ttsTestConnected": {
+    "placeholders": {
+      "ms": { "type": "int" }
+    }
+  },
+  "ttsTestFailed": "连接失败：{detail}",
+  "@ttsTestFailed": {
+    "placeholders": {
+      "detail": { "type": "String" }
+    }
+  },
+  "ttsFallbackLocalLabel": "失败自动回退系统 TTS",
+  "ttsClearCacheLabel": "清理音频缓存 ({size})",
+  "@ttsClearCacheLabel": {
+    "placeholders": {
+      "size": { "type": "String" }
+    }
+  },
+  "ttsCacheClearedToast": "已清理在线语音缓存",
+  "ttsPlayingStatus": "{label} · {rate}x",
+  "@ttsPlayingStatus": {
+    "placeholders": {
+      "label": { "type": "String" },
+      "rate": { "type": "String" }
+    }
+  },
+  "ttsOnlineFallbackNotice": "在线语音不可用，已切换系统朗读",
+  "ttsPrevSentence": "上一句",
+  "ttsNextSentence": "下一句",
+  "ttsPause": "暂停",
+  "ttsResume": "继续",
+  "ttsStop": "停止",
+  "ttsStoppedToast": "已停止听书",
+  "ttsStartedToast": "开始语音朗读",
+  "ttsUnavailableToast": "当前无可朗读内容或语音服务不可用",
+  "ttsTimerExpiredToast": "定时关闭已到",
+  "ttsSleepChapterDoneToast": "本章朗读完毕，已定时停止",
+  "tocRulesTitle": "TXT 目录规则",
+  "newRuleTooltip": "新建规则",
+  "moreActionsTooltip": "更多操作",
+  "importRuleFile": "导入文件",
+  "pasteJsonImport": "粘贴 JSON",
+  "noTocRules": "暂无目录规则",
+  "restoreDefaultRules": "恢复默认规则",
+  "customBadge": "自定义",
+  "examplePrefix": "示例：{example}",
+  "@examplePrefix": {
+    "placeholders": {
+      "example": { "type": "String" }
+    }
+  },
+  "editTestBtn": "编辑 / 测试",
+  "ruleNameLabel": "规则名称",
+  "regexLabel": "正则表达式",
+  "sampleTextLabel": "测试文本",
+  "liveTestBtn": "测试匹配",
+  "deleteRuleTitle": "删除规则",
+  "deleteRuleConfirm": "确定删除「{name}」吗？",
+  "@deleteRuleConfirm": {
+    "placeholders": {
+      "name": { "type": "String" }
+    }
+  },
+  "tocActionsTitle": "规则库操作",
+  "exportToClipboard": "导出规则 JSON",
+  "restoreBuiltinRules": "恢复内置规则",
+  "pasteImportTitle": "粘贴导入规则",
+  "ruleJsonOrRegexLabel": "Legado JSON 或 名称::正则",
+  "pasteFromClipboard": "粘贴剪贴板",
+  "importRulesBtn": "导入",
+  "newRuleTitle": "新建规则",
+  "editRuleTitle": "编辑规则",
+  "webdavTitle": "WebDAV 同步",
+  "webdavConfigureTooltip": "配置服务器",
+  "webdavCenterTitle": "WebDAV 同步中心",
+  "webdavOnline": "在线",
+  "webdavOffline": "待连接",
+  "webdavSyncNow": "立即同步",
+  "webdavSyncing": "同步中...",
+  "webdavCreateBackup": "创建快照",
+  "webdavSyncScope": "同步范围",
+  "webdavScopeProgress": "进度与书签",
+  "webdavScopeProgressDesc": "跨端增量合并阅读位置",
+  "webdavScopeMeta": "书架与笔记",
+  "webdavScopeMetaDesc": "书架分组、划线与批注",
+  "webdavScopePrefs": "排版与主题",
+  "webdavScopePrefsDesc": "阅读字号、配色与外观",
+  "webdavScopeSourceFiles": "书籍与漫画源文件",
+  "webdavScopeSourceFilesDesc": "仅上传非敏感本地文件",
+  "webdavPresetsTitle": "常用服务器预设",
+  "webdavBackupsTitle": "云端快照",
+  "webdavNoBackups": "暂无云端快照",
+  "webdavRestoreBtn": "恢复",
+  "webdavConfigTitle": "配置 {preset}",
+  "@webdavConfigTitle": {
+    "placeholders": {
+      "preset": { "type": "String" }
+    }
+  },
+  "webdavServerUrlLabel": "服务器地址",
+  "webdavUserLabel": "账号",
+  "webdavPassLabel": "应用密码",
+  "webdavRootLabel": "同步目录",
+  "webdavSaveAndTest": "保存并测试",
+  "webdavConflictTitle": "进度冲突",
+  "webdavConflictSubtitle": "《{title}》两端均有新进度：",
+  "@webdavConflictSubtitle": {
+    "placeholders": {
+      "title": { "type": "String" }
+    }
+  },
+  "webdavRemoteLabel": "云端 ({device})",
+  "@webdavRemoteLabel": {
+    "placeholders": {
+      "device": { "type": "String" }
+    }
+  },
+  "webdavLocalLabel": "本机 ({device})",
+  "@webdavLocalLabel": {
+    "placeholders": {
+      "device": { "type": "String" }
+    }
+  },
+  "webdavKeepLocal": "保留本机",
+  "webdavAdoptRemote": "采用云端",
+  "webdavSyncDone": "同步完成",
+  "webdavSnapSummary": "{preset} · 连接正常 ({count} 份快照)",
+  "@webdavSnapSummary": {
+    "placeholders": {
+      "preset": { "type": "String" },
+      "count": { "type": "int" }
+    }
+  },
+  "webdavTestPassed": "连接成功",
+  "webdavTestFailed": "连接失败：{error}",
+  "@webdavTestFailed": {
+    "placeholders": {
+      "error": { "type": "String" }
+    }
+  },
+  "errFileNotFound": "未找到文件",
+  "errFileEmpty": "文件为空 (0 字节)",
+  "errStreamOpen": "无法读取文件流，请检查存储权限",
+  "errUnsupportedType": "不支持的文件格式",
+  "errTtsUnavailable": "系统 TTS 引擎不可用，请检查语音包",
+  "errTtsTimeout": "语音引擎初始化超时",
+  "errTtsSpeakFailed": "语音合成播放失败",
+  "errEdge403": "Edge 直连校验已失效 (403)，请切换自部署网关或使用系统 TTS",
+  "errNetworkTimeout": "网络请求超时",
+  "errHttp401": "接口鉴权失败 (401)，请检查 API Key",
+  "errHttp403": "访问被拒绝 (403)",
+  "errHttpStatus": "服务端返回错误状态",
+  "errInvalidAudio": "服务返回的不是有效音频",
+  "errUnknown": "操作失败"
+}

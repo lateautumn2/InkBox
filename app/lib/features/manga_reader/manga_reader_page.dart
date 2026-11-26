@@ -6,6 +6,8 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/icons/ink_icons.dart';
+import '../../core/l10n/l10n_helpers.dart';
+import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/inkbox_theme.dart';
 import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
@@ -13,6 +15,45 @@ import '../../data/platform/platform_bridge.dart';
 import '../../data/providers/app_providers.dart';
 import 'manga_page_source.dart';
 import 'manga_reader_settings.dart';
+
+typedef MangaSpreadSlot = ({int first, int? second});
+
+/// Computes dual-page pairing slots while keeping cover page isolated (if
+/// [coverAlone]) and isolating any [wideSpreadIndices] onto their own slot.
+List<MangaSpreadSlot> buildMangaSpreadSlots({
+  required int pageCount,
+  required bool coverAlone,
+  required Set<int> wideSpreadIndices,
+}) {
+  if (pageCount <= 0) return const [];
+  final slots = <MangaSpreadSlot>[];
+  var idx = 0;
+  if (coverAlone) {
+    slots.add((first: 0, second: null));
+    idx = 1;
+  }
+  while (idx < pageCount) {
+    if (wideSpreadIndices.contains(idx)) {
+      slots.add((first: idx, second: null));
+      idx += 1;
+    } else if (idx + 1 < pageCount && !wideSpreadIndices.contains(idx + 1)) {
+      slots.add((first: idx, second: idx + 1));
+      idx += 2;
+    } else {
+      slots.add((first: idx, second: null));
+      idx += 1;
+    }
+  }
+  return slots;
+}
+
+int slotIndexForMangaPage(List<MangaSpreadSlot> slots, int page) {
+  if (slots.isEmpty) return 0;
+  for (var i = 0; i < slots.length; i++) {
+    if (slots[i].first == page || slots[i].second == page) return i;
+  }
+  return 0;
+}
 
 /// Complete V1.0 Manga Reading Engine (Mihon / Tachiyomi + FloatingCard Dark Theater):
 /// - CBZ/ZIP, CB7/7Z, PDF image stream, and local image folder streaming
@@ -46,7 +87,9 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
   int _currentPage = 0;
   bool _controlsVisible = false;
   bool _settingsSheetOpen = false;
-  int _settingsTabIndex = 0; // 0: 模式, 1: 滤镜, 2: 常规
+  int _settingsTabIndex = 0; // 0: mode, 1: filter, 2: general
+  Set<int> _wideSpreadIndices = const {};
+  bool _effectiveDual = false;
 
   PageController _pageController = PageController();
   final ScrollController _webtoonScroll = ScrollController();
@@ -139,15 +182,25 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
     final startPage =
         src.pageCount > 0 ? resumePage.clamp(0, src.pageCount - 1) : 0;
 
-    _pageController.dispose();
-    _pageController = PageController(initialPage: _slotForPage(startPage));
-
     setState(() {
       _chapterIdx = clamped;
       _source = src;
       _currentPage = startPage;
+      _wideSpreadIndices = const {};
       _loading = false;
     });
+
+    final initialDual = _computeEffectiveDual(
+      MediaQuery.maybeSizeOf(context) ?? const Size(400, 800),
+      ref.read(mangaReaderSettingsProvider),
+    );
+    _effectiveDual = initialDual;
+    final initSlot = slotIndexForMangaPage(
+      _slotsFor(_effectiveDual, ref.read(mangaReaderSettingsProvider)),
+      startPage,
+    );
+    _pageController.dispose();
+    _pageController = PageController(initialPage: initSlot);
 
     src.preloadAround(
       startPage,
@@ -157,26 +210,41 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
 
   int get _totalPages => _source?.pageCount ?? 0;
 
-  /// Dual-page mode groups page 0 (cover) alone, then pairs [1,2], [3,4]...
-  int get _slotCount {
-    if (_totalPages == 0) return 0;
-    if (_mode == MangaReadingMode.dual) {
-      if (_totalPages == 1) return 1;
-      return 1 + ((_totalPages - 1) / 2).ceil();
+  bool _computeEffectiveDual(Size viewport, MangaReaderSettings settings) {
+    if (_mode == MangaReadingMode.webtoon) return false;
+    if (_mode == MangaReadingMode.dual) return true;
+    return settings.autoDualInLandscape &&
+        viewport.width >= kDualPageMinWidth &&
+        viewport.width > viewport.height;
+  }
+
+  List<MangaSpreadSlot> _slotsFor(bool dual, MangaReaderSettings settings) {
+    if (_totalPages <= 0) return const [];
+    if (!dual) {
+      return List.generate(_totalPages, (i) => (first: i, second: null));
     }
-    return _totalPages;
+    return buildMangaSpreadSlots(
+      pageCount: _totalPages,
+      coverAlone: settings.dualPageShift,
+      wideSpreadIndices: _wideSpreadIndices,
+    );
   }
 
-  int _slotForPage(int page) {
-    if (_mode != MangaReadingMode.dual) return page;
-    if (page <= 0) return 0;
-    return 1 + ((page - 1) ~/ 2);
-  }
-
-  int _firstPageOfSlot(int slot) {
-    if (_mode != MangaReadingMode.dual) return slot;
-    if (slot <= 0) return 0;
-    return 1 + (slot - 1) * 2;
+  void _handleDecodedMangaPage(DecodedMangaPage page) {
+    if (!page.isWideSpread || _wideSpreadIndices.contains(page.index)) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || _wideSpreadIndices.contains(page.index)) return;
+      final settings = ref.read(mangaReaderSettingsProvider);
+      setState(() {
+        _wideSpreadIndices = {..._wideSpreadIndices, page.index};
+      });
+      if (_effectiveDual &&
+          _mode != MangaReadingMode.webtoon &&
+          _pageController.hasClients) {
+        final newSlots = _slotsFor(_effectiveDual, settings);
+        _pageController.jumpToPage(slotIndexForMangaPage(newSlots, _currentPage));
+      }
+    });
   }
 
   void _stepPage(int delta) {
@@ -193,21 +261,23 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
       return;
     }
 
-    final curSlot = _slotForPage(_currentPage);
+    final settings = ref.read(mangaReaderSettingsProvider);
+    final slots = _slotsFor(_effectiveDual, settings);
+    final curSlot = slotIndexForMangaPage(slots, _currentPage);
     final targetSlot = curSlot + delta;
     if (targetSlot < 0) {
       if (_chapterIdx > 0) {
         _openChapter(_chapterIdx - 1);
       } else {
-        _toast('已是第一页');
+        _toast(context.l10n.firstPageToast);
       }
       return;
     }
-    if (targetSlot >= _slotCount) {
+    if (targetSlot >= slots.length) {
       if (_chapterIdx + 1 < _chapters.length) {
         _openChapter(_chapterIdx + 1);
       } else {
-        _toast('本话已读完');
+        _toast(context.l10n.chapterFinishedToast);
       }
       return;
     }
@@ -222,9 +292,11 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
   void _jumpToPage(int page) {
     if (_totalPages == 0) return;
     final clamped = page.clamp(0, _totalPages - 1);
+    final settings = ref.read(mangaReaderSettingsProvider);
+    final slots = _slotsFor(_effectiveDual, settings);
     setState(() => _currentPage = clamped);
     if (_mode != MangaReadingMode.webtoon && _pageController.hasClients) {
-      _pageController.jumpToPage(_slotForPage(clamped));
+      _pageController.jumpToPage(slotIndexForMangaPage(slots, clamped));
     }
     _persistProgress();
   }
@@ -249,9 +321,19 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
             preferredReadingMode: nextMode.code,
           );
     }
+    if (!mounted) return;
     if (nextMode != MangaReadingMode.webtoon) {
+      final settings = ref.read(mangaReaderSettingsProvider);
+      final dual = _computeEffectiveDual(
+        MediaQuery.maybeSizeOf(context) ?? const Size(400, 800),
+        settings,
+      );
+      _effectiveDual = dual;
+      final slots = _slotsFor(dual, settings);
       _pageController.dispose();
-      _pageController = PageController(initialPage: _slotForPage(_currentPage));
+      _pageController = PageController(
+        initialPage: slotIndexForMangaPage(slots, _currentPage),
+      );
       setState(() {});
     }
   }
@@ -312,6 +394,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final settings = ref.watch(mangaReaderSettingsProvider);
     final settingsCtrl = ref.read(mangaReaderSettingsProvider.notifier);
     final chapterTitle =
@@ -321,19 +404,33 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
     Widget readerCanvas = _loading
         ? const Center(child: CircularProgressIndicator(color: Colors.white))
         : _totalPages == 0
-            ? const Center(
+            ? Center(
                 child: Text(
-                  '该章节未发现可渲染图片',
-                  style: TextStyle(color: Colors.white70),
+                  l10n.mangaNoImagesInChapter,
+                  style: const TextStyle(color: Colors.white70),
                 ),
               )
             : LayoutBuilder(
                 builder: (context, constraints) {
                   final size = constraints.biggest;
+                  final dual = _computeEffectiveDual(size, settings);
+                  final slots = _slotsFor(dual, settings);
+                  if (dual != _effectiveDual) {
+                    WidgetsBinding.instance.addPostFrameCallback((_) {
+                      if (!mounted) return;
+                      setState(() => _effectiveDual = dual);
+                      if (_mode != MangaReadingMode.webtoon &&
+                          _pageController.hasClients) {
+                        _pageController.jumpToPage(
+                          slotIndexForMangaPage(slots, _currentPage),
+                        );
+                      }
+                    });
+                  }
                   return GestureDetector(
                     behavior: HitTestBehavior.opaque,
                     onTapUp: (d) => _handleCanvasTap(d, size),
-                    child: _buildModeViewport(settings),
+                    child: _buildModeViewport(settings, dual, slots),
                   );
                 },
               );
@@ -341,6 +438,8 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
     if (filter != null) {
       readerCanvas = ColorFiltered(colorFilter: filter, child: readerCanvas);
     }
+
+    final wideControls = MediaQuery.sizeOf(context).width > 680;
 
     return Scaffold(
       backgroundColor: settings.canvasBg.color,
@@ -378,7 +477,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Text(
-                        '$chapterTitle · ${_mode.label}',
+                        '$chapterTitle · ${_effectiveDual ? l10n.mangaReadingModeDual : _mode.labelOf(l10n)}',
                         style: const TextStyle(
                           fontSize: 10.5,
                           color: Colors.white70,
@@ -414,81 +513,89 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
               top: MediaQuery.of(context).padding.top + 8,
               left: 12,
               right: 12,
-              child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: const Color(0xEB1A1C21),
-                  borderRadius: BorderRadius.circular(20),
-                  border: Border.all(color: Colors.white12),
-                  boxShadow: const [
-                    BoxShadow(
-                      color: Color(0x80000000),
-                      blurRadius: 20,
-                      offset: Offset(0, 8),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: wideControls ? 620 : double.infinity,
+                  ),
+                  child: Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: const Color(0xEB1A1C21),
+                      borderRadius: BorderRadius.circular(20),
+                      border: Border.all(color: Colors.white12),
+                      boxShadow: const [
+                        BoxShadow(
+                          color: Color(0x80000000),
+                          blurRadius: 20,
+                          offset: Offset(0, 8),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-                child: Row(
-                  children: [
-                    IconButton(
-                      onPressed: () => context.pop(),
-                      icon: const InkIconWidget(
-                        InkIcon.back,
-                        size: 18,
-                        color: Colors.white,
-                      ),
-                    ),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            _manga?.title ?? '漫画阅读',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 13.5,
-                              fontWeight: FontWeight.w700,
-                              color: Colors.white,
-                            ),
+                    child: Row(
+                      children: [
+                        IconButton(
+                          onPressed: () => context.pop(),
+                          icon: const InkIconWidget(
+                            InkIcon.back,
+                            size: 18,
+                            color: Colors.white,
                           ),
-                          Text(
-                            chapterTitle,
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: const TextStyle(
-                              fontSize: 11,
-                              color: Colors.white60,
-                            ),
+                        ),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                _manga?.title ?? l10n.navManga,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 13.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: Colors.white,
+                                ),
+                              ),
+                              Text(
+                                chapterTitle,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white60,
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
+                        ),
+                        IconButton(
+                          tooltip: l10n.mangaToggleCropTooltip,
+                          onPressed: () => settingsCtrl
+                              .update((s) => s.copyWith(autoCrop: !s.autoCrop)),
+                          icon: InkIconWidget(
+                            InkIcon.crop,
+                            size: 18,
+                            color: settings.autoCrop
+                                ? InkBoxTheme.slateInkDark
+                                : Colors.white70,
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: l10n.mangaToggleSettingsTooltip,
+                          onPressed: () => setState(
+                              () => _settingsSheetOpen = !_settingsSheetOpen),
+                          icon: InkIconWidget(
+                            InkIcon.gear,
+                            size: 18,
+                            color: _settingsSheetOpen
+                                ? InkBoxTheme.slateInkDark
+                                : Colors.white70,
+                          ),
+                        ),
+                      ],
                     ),
-                    IconButton(
-                      tooltip: '快捷切换智能裁边',
-                      onPressed: () => settingsCtrl
-                          .update((s) => s.copyWith(autoCrop: !s.autoCrop)),
-                      icon: InkIconWidget(
-                        InkIcon.crop,
-                        size: 18,
-                        color: settings.autoCrop
-                            ? InkBoxTheme.slateInkDark
-                            : Colors.white70,
-                      ),
-                    ),
-                    IconButton(
-                      tooltip: '展开阅读器设置',
-                      onPressed: () => setState(
-                          () => _settingsSheetOpen = !_settingsSheetOpen),
-                      icon: InkIconWidget(
-                        InkIcon.gear,
-                        size: 18,
-                        color: _settingsSheetOpen
-                            ? InkBoxTheme.slateInkDark
-                            : Colors.white70,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -499,146 +606,155 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
               left: 12,
               right: 12,
               bottom: MediaQuery.of(context).padding.bottom + 12,
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  if (!_settingsSheetOpen) ...[
-                    // Floating Page Scrubber Pill (RTL-mirrored when RTL active!)
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 10),
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 4,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xEB1A1C21),
-                        borderRadius: BorderRadius.circular(999),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Row(
-                        children: [
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            onPressed: _chapterIdx > 0
-                                ? () => _openChapter(_chapterIdx - 1)
-                                : null,
-                            icon: const InkIconWidget(
-                              InkIcon.back,
-                              size: 16,
-                              color: Colors.white70,
-                            ),
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: wideControls ? 620 : double.infinity,
+                  ),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (!_settingsSheetOpen) ...[
+                        // Floating Page Scrubber Pill (RTL-mirrored when RTL active!)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 4,
                           ),
-                          Text(
-                            _mode == MangaReadingMode.rtl
-                                ? '$_totalPages'
-                                : '${_currentPage + 1}',
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              color: Colors.white70,
-                            ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xEB1A1C21),
+                            borderRadius: BorderRadius.circular(999),
+                            border: Border.all(color: Colors.white12),
                           ),
-                          Expanded(
-                            child: Directionality(
-                              textDirection: _mode == MangaReadingMode.rtl
-                                  ? TextDirection.rtl
-                                  : TextDirection.ltr,
-                              child: Slider(
-                                min: 0,
-                                max: (_totalPages - 1).clamp(1, 9999).toDouble(),
-                                value: _currentPage
-                                    .clamp(0, (_totalPages - 1).clamp(1, 9999))
-                                    .toDouble(),
-                                activeColor: InkBoxTheme.slateInkDark,
-                                onChanged: _totalPages > 1
-                                    ? (v) => _jumpToPage(v.round())
+                          child: Row(
+                            children: [
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                onPressed: _chapterIdx > 0
+                                    ? () => _openChapter(_chapterIdx - 1)
                                     : null,
+                                icon: const InkIconWidget(
+                                  InkIcon.back,
+                                  size: 16,
+                                  color: Colors.white70,
+                                ),
                               ),
-                            ),
-                          ),
-                          Text(
-                            _mode == MangaReadingMode.rtl
-                                ? '${_currentPage + 1}'
-                                : '$_totalPages',
-                            style: const TextStyle(
-                              fontSize: 11.5,
-                              color: Colors.white70,
-                            ),
-                          ),
-                          IconButton(
-                            visualDensity: VisualDensity.compact,
-                            onPressed: _chapterIdx + 1 < _chapters.length
-                                ? () => _openChapter(_chapterIdx + 1)
-                                : null,
-                            icon: Transform(
-                              alignment: Alignment.center,
-                              transform: Matrix4.diagonal3Values(-1, 1, 1),
-                              child: const InkIconWidget(
-                                InkIcon.back,
-                                size: 16,
-                                color: Colors.white70,
+                              Text(
+                                _mode == MangaReadingMode.rtl
+                                    ? '$_totalPages'
+                                    : '${_currentPage + 1}',
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  color: Colors.white70,
+                                ),
                               ),
-                            ),
+                              Expanded(
+                                child: Directionality(
+                                  textDirection: _mode == MangaReadingMode.rtl
+                                      ? TextDirection.rtl
+                                      : TextDirection.ltr,
+                                  child: Slider(
+                                    min: 0,
+                                    max: (_totalPages - 1)
+                                        .clamp(1, 9999)
+                                        .toDouble(),
+                                    value: _currentPage
+                                        .clamp(0, (_totalPages - 1).clamp(1, 9999))
+                                        .toDouble(),
+                                    activeColor: InkBoxTheme.slateInkDark,
+                                    onChanged: _totalPages > 1
+                                        ? (v) => _jumpToPage(v.round())
+                                        : null,
+                                  ),
+                                ),
+                              ),
+                              Text(
+                                _mode == MangaReadingMode.rtl
+                                    ? '${_currentPage + 1}'
+                                    : '$_totalPages',
+                                style: const TextStyle(
+                                  fontSize: 11.5,
+                                  color: Colors.white70,
+                                ),
+                              ),
+                              IconButton(
+                                visualDensity: VisualDensity.compact,
+                                onPressed: _chapterIdx + 1 < _chapters.length
+                                    ? () => _openChapter(_chapterIdx + 1)
+                                    : null,
+                                icon: Transform(
+                                  alignment: Alignment.center,
+                                  transform: Matrix4.diagonal3Values(-1, 1, 1),
+                                  child: const InkIconWidget(
+                                    InkIcon.back,
+                                    size: 16,
+                                    color: Colors.white70,
+                                  ),
+                                ),
+                              ),
+                            ],
                           ),
-                        ],
-                      ),
-                    ),
-                    // Quick Action Floating Dock
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 10,
-                        vertical: 11,
-                      ),
-                      decoration: BoxDecoration(
-                        color: const Color(0xF21A1C21),
-                        borderRadius: BorderRadius.circular(24),
-                        border: Border.all(color: Colors.white12),
-                      ),
-                      child: Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          _DarkDockAction(
-                            icon: InkIcon.pageCurl,
-                            label: _mode.label,
-                            active: true,
-                            onTap: () => setState(() {
-                              _settingsSheetOpen = true;
-                              _settingsTabIndex = 0;
-                            }),
+                        ),
+                        // Quick Action Floating Dock
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 10,
+                            vertical: 11,
                           ),
-                          _DarkDockAction(
-                            icon: InkIcon.crop,
-                            label: '智能裁边',
-                            active: settings.autoCrop,
-                            onTap: () => settingsCtrl.update(
-                              (s) => s.copyWith(autoCrop: !s.autoCrop),
-                            ),
+                          decoration: BoxDecoration(
+                            color: const Color(0xF21A1C21),
+                            borderRadius: BorderRadius.circular(24),
+                            border: Border.all(color: Colors.white12),
                           ),
-                          _DarkDockAction(
-                            icon: InkIcon.filter,
-                            label: '图像滤镜',
-                            active: settings.warmFilter ||
-                                settings.grayscaleFilter ||
-                                settings.dimmerOpacity > 0,
-                            onTap: () => setState(() {
-                              _settingsSheetOpen = true;
-                              _settingsTabIndex = 1;
-                            }),
+                          child: Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceAround,
+                            children: [
+                              _DarkDockAction(
+                                icon: InkIcon.pageCurl,
+                                label: _mode.labelOf(l10n),
+                                active: true,
+                                onTap: () => setState(() {
+                                  _settingsSheetOpen = true;
+                                  _settingsTabIndex = 0;
+                                }),
+                              ),
+                              _DarkDockAction(
+                                icon: InkIcon.crop,
+                                label: l10n.smartCropLabel,
+                                active: settings.autoCrop,
+                                onTap: () => settingsCtrl.update(
+                                  (s) => s.copyWith(autoCrop: !s.autoCrop),
+                                ),
+                              ),
+                              _DarkDockAction(
+                                icon: InkIcon.filter,
+                                label: l10n.mangaTabFilter,
+                                active: settings.warmFilter ||
+                                    settings.grayscaleFilter ||
+                                    settings.dimmerOpacity > 0,
+                                onTap: () => setState(() {
+                                  _settingsSheetOpen = true;
+                                  _settingsTabIndex = 1;
+                                }),
+                              ),
+                              _DarkDockAction(
+                                icon: InkIcon.gear,
+                                label: l10n.mangaTabGeneral,
+                                active: false,
+                                onTap: () => setState(() {
+                                  _settingsSheetOpen = true;
+                                  _settingsTabIndex = 2;
+                                }),
+                              ),
+                            ],
                           ),
-                          _DarkDockAction(
-                            icon: InkIcon.gear,
-                            label: '常规',
-                            active: false,
-                            onTap: () => setState(() {
-                              _settingsSheetOpen = true;
-                              _settingsTabIndex = 2;
-                            }),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ] else
-                    _buildMihonSettingsCard(settings, settingsCtrl),
-                ],
+                        ),
+                      ] else
+                        _buildMihonSettingsCard(settings, settingsCtrl),
+                    ],
+                  ),
+                ),
               ),
             ),
         ],
@@ -646,7 +762,15 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
     );
   }
 
-  Widget _buildModeViewport(MangaReaderSettings settings) {
+  Widget _buildModeViewport(
+    MangaReaderSettings settings,
+    bool dual,
+    List<MangaSpreadSlot> slots,
+  ) {
+    final l10n = context.l10n;
+    final decodeFailedText = l10n.mangaDecodeFailed;
+    final fallbackTitle = _manga?.title ?? l10n.navManga;
+
     if (_mode == MangaReadingMode.webtoon) {
       final hPad =
           MediaQuery.of(context).size.width * settings.webtoonSidePaddingPct;
@@ -659,7 +783,8 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
           return _MangaSinglePageView(
             source: _source!,
             pageIndex: index,
-            title: _manga?.title ?? '漫画',
+            title: fallbackTitle,
+            decodeFailedText: decodeFailedText,
             settings: settings,
             isWebtoon: true,
           );
@@ -673,54 +798,55 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
     return PageView.builder(
       controller: _pageController,
       reverse: reverse,
-      itemCount: _slotCount,
+      itemCount: slots.length,
       onPageChanged: (slot) {
-        final page = _firstPageOfSlot(slot);
+        if (slot < 0 || slot >= slots.length) return;
+        final page = slots[slot].first;
         setState(() => _currentPage = page);
         _source?.preloadAround(page, computeCrop: settings.autoCrop);
         _persistProgress();
       },
       itemBuilder: (context, slot) {
-        if (_mode == MangaReadingMode.dual) {
-          if (slot == 0) {
-            return _MangaSinglePageView(
-              source: _source!,
-              pageIndex: 0,
-              title: _manga?.title ?? '漫画',
-              settings: settings,
-            );
-          }
-          final p1 = 1 + (slot - 1) * 2;
-          final p2 = p1 + 1;
-          return Row(
-            children: [
-              Expanded(
-                child: p2 < _totalPages
-                    ? _MangaSinglePageView(
-                        source: _source!,
-                        pageIndex: p2,
-                        title: _manga?.title ?? '漫画',
-                        settings: settings,
-                      )
-                    : const SizedBox.shrink(),
-              ),
-              Expanded(
-                child: _MangaSinglePageView(
-                  source: _source!,
-                  pageIndex: p1,
-                  title: _manga?.title ?? '漫画',
-                  settings: settings,
-                ),
-              ),
-            ],
+        final item = slots[slot];
+        if (!dual || item.second == null) {
+          return _MangaSinglePageView(
+            source: _source!,
+            pageIndex: item.first,
+            title: fallbackTitle,
+            decodeFailedText: decodeFailedText,
+            settings: settings,
+            onDecodedPage: _handleDecodedMangaPage,
           );
         }
 
-        return _MangaSinglePageView(
-          source: _source!,
-          pageIndex: slot,
-          title: _manga?.title ?? '漫画',
-          settings: settings,
+        final p1 = item.first;
+        final p2 = item.second!;
+        final leftIdx = reverse ? p2 : p1;
+        final rightIdx = reverse ? p1 : p2;
+
+        return Row(
+          children: [
+            Expanded(
+              child: _MangaSinglePageView(
+                source: _source!,
+                pageIndex: leftIdx,
+                title: fallbackTitle,
+                decodeFailedText: decodeFailedText,
+                settings: settings,
+                onDecodedPage: _handleDecodedMangaPage,
+              ),
+            ),
+            Expanded(
+              child: _MangaSinglePageView(
+                source: _source!,
+                pageIndex: rightIdx,
+                title: fallbackTitle,
+                decodeFailedText: decodeFailedText,
+                settings: settings,
+                onDecodedPage: _handleDecodedMangaPage,
+              ),
+            ),
+          ],
         );
       },
     );
@@ -730,6 +856,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
     MangaReaderSettings settings,
     MangaReaderSettingsController ctrl,
   ) {
+    final l10n = context.l10n;
     return Container(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
       decoration: BoxDecoration(
@@ -754,19 +881,19 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
                 child: Row(
                   children: [
                     _SettingsTabPill(
-                      '阅读模式',
+                      l10n.mangaTabMode,
                       active: _settingsTabIndex == 0,
                       onTap: () => setState(() => _settingsTabIndex = 0),
                     ),
                     const SizedBox(width: 6),
                     _SettingsTabPill(
-                      '图像滤镜',
+                      l10n.mangaTabFilter,
                       active: _settingsTabIndex == 1,
                       onTap: () => setState(() => _settingsTabIndex = 1),
                     ),
                     const SizedBox(width: 6),
                     _SettingsTabPill(
-                      '常规',
+                      l10n.mangaTabGeneral,
                       active: _settingsTabIndex == 2,
                       onTap: () => setState(() => _settingsTabIndex = 2),
                     ),
@@ -807,7 +934,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
                       ),
                     ),
                     child: Text(
-                      m.label,
+                      m.labelOf(l10n),
                       style: TextStyle(
                         fontSize: 12,
                         fontWeight: FontWeight.w600,
@@ -833,7 +960,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
-                      st.label,
+                      st.labelOf(l10n),
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -846,33 +973,45 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
             ),
             const SizedBox(height: 10),
             _DarkSwitchRow(
-              label: '自动切分跨页宽图',
+              label: l10n.mangaAutoDualLandscape,
+              value: settings.autoDualInLandscape,
+              onChanged: (v) =>
+                  ctrl.update((s) => s.copyWith(autoDualInLandscape: v)),
+            ),
+            _DarkSwitchRow(
+              label: l10n.mangaCoverAlone,
+              value: settings.dualPageShift,
+              onChanged: (v) =>
+                  ctrl.update((s) => s.copyWith(dualPageShift: v)),
+            ),
+            _DarkSwitchRow(
+              label: l10n.splitWidePagesLabel,
               value: settings.splitWidePages,
               onChanged: (v) =>
                   ctrl.update((s) => s.copyWith(splitWidePages: v)),
             ),
           ] else if (_settingsTabIndex == 1) ...[
             _DarkSwitchRow(
-              label: '智能裁切白边',
+              label: l10n.mangaAutoCrop,
               value: settings.autoCrop,
               onChanged: (v) => ctrl.update((s) => s.copyWith(autoCrop: v)),
             ),
             _DarkSwitchRow(
-              label: '夜间暖色护眼滤镜',
+              label: l10n.mangaWarmFilter,
               value: settings.warmFilter,
               onChanged: (v) => ctrl.update((s) => s.copyWith(warmFilter: v)),
             ),
             _DarkSwitchRow(
-              label: '黑白墨色增强 (灰度)',
+              label: l10n.mangaGrayscaleFilter,
               value: settings.grayscaleFilter,
               onChanged: (v) =>
                   ctrl.update((s) => s.copyWith(grayscaleFilter: v)),
             ),
             Row(
               children: [
-                const Text(
-                  '暗室调光',
-                  style: TextStyle(fontSize: 12, color: Colors.white70),
+                Text(
+                  l10n.mangaDimmerLabel,
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
                 ),
                 Expanded(
                   child: Slider(
@@ -888,9 +1027,9 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
             ),
             Row(
               children: [
-                const Text(
-                  '画布底色',
-                  style: TextStyle(fontSize: 12, color: Colors.white70),
+                Text(
+                  l10n.mangaCanvasBgLabel,
+                  style: const TextStyle(fontSize: 12, color: Colors.white70),
                 ),
                 const SizedBox(width: 12),
                 ...MangaCanvasBg.values.map((bg) {
@@ -919,9 +1058,9 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
               ],
             ),
           ] else ...[
-            const Text(
-              '点击翻页布局',
-              style: TextStyle(fontSize: 12, color: Colors.white70),
+            Text(
+              l10n.mangaTapLayoutLabel,
+              style: const TextStyle(fontSize: 12, color: Colors.white70),
             ),
             const SizedBox(height: 6),
             Wrap(
@@ -938,7 +1077,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
                       borderRadius: BorderRadius.circular(999),
                     ),
                     child: Text(
-                      tl.label,
+                      tl.labelOf(l10n),
                       style: TextStyle(
                         fontSize: 11.5,
                         fontWeight: FontWeight.w600,
@@ -951,7 +1090,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
             ),
             const SizedBox(height: 10),
             _DarkSwitchRow(
-              label: '音量键翻页',
+              label: l10n.volumeKeyPaging,
               value: settings.volumeKeyPaging,
               onChanged: (v) {
                 ctrl.update((s) => s.copyWith(volumeKeyPaging: v));
@@ -959,7 +1098,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
               },
             ),
             _DarkSwitchRow(
-              label: '显示底角页码提示',
+              label: l10n.mangaShowPageBadge,
               value: settings.showPageBadge,
               onChanged: (v) =>
                   ctrl.update((s) => s.copyWith(showPageBadge: v)),
@@ -976,15 +1115,19 @@ class _MangaSinglePageView extends StatefulWidget {
     required this.source,
     required this.pageIndex,
     required this.title,
+    required this.decodeFailedText,
     required this.settings,
     this.isWebtoon = false,
+    this.onDecodedPage,
   });
 
   final MangaPageSource source;
   final int pageIndex;
   final String title;
+  final String decodeFailedText;
   final MangaReaderSettings settings;
   final bool isWebtoon;
+  final ValueChanged<DecodedMangaPage>? onDecodedPage;
 
   @override
   State<_MangaSinglePageView> createState() => _MangaSinglePageViewState();
@@ -1052,10 +1195,14 @@ class _MangaSinglePageViewState extends State<_MangaSinglePageView> {
         }
         final page = snap.data;
         if (page == null) {
-          return const Center(
-            child: Text('页面解码失败', style: TextStyle(color: Colors.white54)),
+          return Center(
+            child: Text(
+              widget.decodeFailedText,
+              style: const TextStyle(color: Colors.white54),
+            ),
           );
         }
+        widget.onDecodedPage?.call(page);
 
         Widget img = Image.memory(
           Uint8List.fromList(page.bytes),

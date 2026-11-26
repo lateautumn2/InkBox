@@ -58,12 +58,58 @@ class LoadedTocResult {
 /// Paginates chapter plain text accurately to viewport bounds using TextPainter,
 /// preserving exact character offsets so resizing fonts never loses reading place.
 class BookPaginator {
+  static Set<int> spacerNewlineIndices(String text) {
+    final indices = <int>{};
+    var idx = text.indexOf('\n\n');
+    while (idx != -1) {
+      indices.add(idx + 1);
+      idx = text.indexOf('\n\n', idx + 2);
+    }
+    return indices;
+  }
+
+  /// Builds a rich [TextSpan] where each paragraph break (`\n\n`) renders its
+  /// second `\n` at exact height `paragraphSpacing` while keeping every UTF-16
+  /// character offset 1:1 with [text].
+  static TextSpan buildStyledSpan(
+    String text,
+    TextStyle style, {
+    double paragraphSpacing = 12.0,
+  }) {
+    if (text.isEmpty || !text.contains('\n\n')) {
+      return TextSpan(text: text, style: style);
+    }
+    final spacerHeight = paragraphSpacing.clamp(0.5, 48.0);
+    final spacerStyle = style.copyWith(
+      fontSize: spacerHeight,
+      height: 1.0,
+      letterSpacing: 0.0,
+    );
+    final children = <InlineSpan>[];
+    var cursor = 0;
+    var matchIdx = text.indexOf('\n\n');
+    while (matchIdx != -1) {
+      final spacerIdx = matchIdx + 1;
+      if (spacerIdx > cursor) {
+        children.add(TextSpan(text: text.substring(cursor, spacerIdx)));
+      }
+      children.add(TextSpan(text: '\n', style: spacerStyle));
+      cursor = spacerIdx + 1;
+      matchIdx = text.indexOf('\n\n', cursor);
+    }
+    if (cursor < text.length) {
+      children.add(TextSpan(text: text.substring(cursor)));
+    }
+    return TextSpan(style: style, children: children);
+  }
+
   static List<BookPageSlice> paginate({
     required String text,
     required double maxWidth,
     required double maxHeight,
     required TextStyle style,
     bool indentParagraphs = true,
+    double paragraphSpacing = 12.0,
   }) {
     final normalized = formatParagraphs(text, indent: indentParagraphs);
     if (normalized.isEmpty || maxWidth <= 24 || maxHeight <= 24) {
@@ -72,7 +118,7 @@ class BookPaginator {
           pageIndex: 0,
           startOffset: 0,
           endOffset: normalized.length,
-          text: normalized.isEmpty ? '（本章节暂无正文内容）' : normalized,
+          text: normalized,
           isPlaceholder: normalized.isEmpty,
         ),
       ];
@@ -105,7 +151,11 @@ class BookPaginator {
         }
         remaining = normalized.substring(offset, windowEnd);
         tp = TextPainter(
-          text: TextSpan(text: remaining, style: style),
+          text: buildStyledSpan(
+            remaining,
+            style,
+            paragraphSpacing: paragraphSpacing,
+          ),
           textDirection: TextDirection.ltr,
         )..layout(maxWidth: maxWidth);
 
@@ -135,7 +185,11 @@ class BookPaginator {
       } else {
         // Verify line fits strictly inside maxHeight so bottom line never clips.
         final probe = TextPainter(
-          text: TextSpan(text: remaining.substring(0, take), style: style),
+          text: buildStyledSpan(
+            remaining.substring(0, take),
+            style,
+            paragraphSpacing: paragraphSpacing,
+          ),
           textDirection: TextDirection.ltr,
         )..layout(maxWidth: maxWidth);
         if (probe.height > maxHeight && take > 1) {

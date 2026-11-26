@@ -87,7 +87,7 @@ class _InkTextFieldState extends State<InkTextField> {
           duration: const Duration(milliseconds: 160),
           decoration: BoxDecoration(
             color: tokens.surfaceVariant.withValues(alpha: 0.72),
-            borderRadius: BorderRadius.circular(14),
+            borderRadius: BorderRadius.circular(12),
             border: Border.all(
               color: _focused ? tokens.accentPrimary : tokens.subtleBorder,
               width: _focused ? 1.5 : 1,
@@ -346,139 +346,149 @@ Future<T?> showInkOptionSheet<T>({
     builder: (ctx) {
       final tokens = InkBoxTokens.of(ctx);
       final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+      final isWide = MediaQuery.sizeOf(ctx).width >= 600;
       return SafeArea(
-        child: Padding(
-          padding: EdgeInsets.fromLTRB(
-            tokens.isFloatingCard ? 14 : 0,
-            0,
-            tokens.isFloatingCard ? 14 : 0,
-            (tokens.isFloatingCard ? 14 : 0) + bottomInset,
-          ),
-          child: FloatingCard(
-            frosted: true,
-            radius: 26,
-            padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
-            child: ConstrainedBox(
-              constraints: BoxConstraints(
-                maxHeight: MediaQuery.sizeOf(ctx).height * 0.72,
+        child: Center(
+          heightFactor: 1.0,
+          child: ConstrainedBox(
+            constraints: BoxConstraints(
+              maxWidth: isWide ? 460 : double.infinity,
+            ),
+            child: Padding(
+              padding: EdgeInsets.fromLTRB(
+                tokens.isFloatingCard ? 14 : 0,
+                0,
+                tokens.isFloatingCard ? 14 : 0,
+                (tokens.isFloatingCard ? 14 : 0) + bottomInset,
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Center(
-                    child: Container(
-                      width: 38,
-                      height: 4,
-                      decoration: BoxDecoration(
-                        color: tokens.inkMuted.withValues(alpha: 0.3),
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                    ),
+              child: FloatingCard(
+                frosted: true,
+                radius: 22,
+                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxHeight: MediaQuery.sizeOf(ctx).height * 0.72,
                   ),
-                  const SizedBox(height: 12),
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 4),
-                    child: Text(
-                      title,
-                      style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
-                            fontWeight: FontWeight.w700,
-                            color: tokens.inkPrimary,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Center(
+                        child: Container(
+                          width: 38,
+                          height: 4,
+                          decoration: BoxDecoration(
+                            color: tokens.inkMuted.withValues(alpha: 0.3),
+                            borderRadius: BorderRadius.circular(999),
                           ),
-                    ),
-                  ),
-                  if (subtitle != null && subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 3),
-                    Padding(
-                      padding: const EdgeInsets.symmetric(horizontal: 4),
-                      child: Text(
-                        subtitle,
-                        style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+                        ),
                       ),
-                    ),
-                  ],
-                  const SizedBox(height: 12),
-                  Flexible(
-                    child: ListView.separated(
-                      shrinkWrap: true,
-                      itemCount: options.length,
-                      separatorBuilder: (_, _) => const SizedBox(height: 6),
-                      itemBuilder: (_, idx) {
-                        final opt = options[idx];
-                        final active =
-                            selectedValue != null && opt.value == selectedValue;
-                        final fg = opt.danger
-                            ? tokens.accentWarm
-                            : (active
-                                ? tokens.accentPrimary
-                                : tokens.inkPrimary);
-                        return Material(
-                          color: active
-                              ? tokens.accentSoft
-                              : tokens.surfaceVariant.withValues(alpha: 0.55),
-                          borderRadius: BorderRadius.circular(14),
-                          clipBehavior: Clip.antiAlias,
-                          child: InkWell(
-                            onTap: () => Navigator.of(ctx).pop(opt.value),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 14,
-                                vertical: 12,
+                      const SizedBox(height: 12),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: Text(
+                          title,
+                          style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                                fontWeight: FontWeight.w700,
+                                color: tokens.inkPrimary,
                               ),
-                              child: Row(
-                                children: [
-                                  if (opt.icon != null) ...[
-                                    InkIconWidget(
-                                      opt.icon!,
-                                      size: 18,
-                                      color: fg,
-                                    ),
-                                    const SizedBox(width: 10),
-                                  ],
-                                  Expanded(
-                                    child: Column(
-                                      crossAxisAlignment:
-                                          CrossAxisAlignment.start,
-                                      children: [
-                                        Text(
-                                          opt.label,
-                                          style: TextStyle(
-                                            fontSize: 13.5,
-                                            fontWeight: FontWeight.w600,
-                                            color: fg,
-                                          ),
-                                        ),
-                                        if (opt.subtitle != null &&
-                                            opt.subtitle!.isNotEmpty) ...[
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            opt.subtitle!,
-                                            maxLines: 2,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: tokens.inkMuted,
-                                            ),
-                                          ),
-                                        ],
-                                      ],
-                                    ),
+                        ),
+                      ),
+                      if (subtitle != null && subtitle.isNotEmpty) ...[
+                        const SizedBox(height: 3),
+                        Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 4),
+                          child: Text(
+                            subtitle,
+                            style:
+                                TextStyle(fontSize: 12, color: tokens.inkMuted),
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 12),
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: options.length,
+                          separatorBuilder: (_, _) => const SizedBox(height: 6),
+                          itemBuilder: (_, idx) {
+                            final opt = options[idx];
+                            final active = selectedValue != null &&
+                                opt.value == selectedValue;
+                            final fg = opt.danger
+                                ? tokens.accentWarm
+                                : (active
+                                    ? tokens.accentPrimary
+                                    : tokens.inkPrimary);
+                            return Material(
+                              color: active
+                                  ? tokens.accentSoft
+                                  : tokens.surfaceVariant.withValues(alpha: 0.55),
+                              borderRadius: BorderRadius.circular(14),
+                              clipBehavior: Clip.antiAlias,
+                              child: InkWell(
+                                onTap: () => Navigator.of(ctx).pop(opt.value),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 14,
+                                    vertical: 12,
                                   ),
-                                  if (active)
-                                    InkIconWidget(
-                                      InkIcon.check,
-                                      size: 16,
-                                      color: tokens.accentPrimary,
-                                    ),
-                                ],
+                                  child: Row(
+                                    children: [
+                                      if (opt.icon != null) ...[
+                                        InkIconWidget(
+                                          opt.icon!,
+                                          size: 18,
+                                          color: fg,
+                                        ),
+                                        const SizedBox(width: 10),
+                                      ],
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              opt.label,
+                                              style: TextStyle(
+                                                fontSize: 13.5,
+                                                fontWeight: FontWeight.w600,
+                                                color: fg,
+                                              ),
+                                            ),
+                                            if (opt.subtitle != null &&
+                                                opt.subtitle!.isNotEmpty) ...[
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                opt.subtitle!,
+                                                maxLines: 2,
+                                                overflow: TextOverflow.ellipsis,
+                                                style: TextStyle(
+                                                  fontSize: 11,
+                                                  color: tokens.inkMuted,
+                                                ),
+                                              ),
+                                            ],
+                                          ],
+                                        ),
+                                      ),
+                                      if (active)
+                                        InkIconWidget(
+                                          InkIcon.check,
+                                          size: 16,
+                                          color: tokens.accentPrimary,
+                                        ),
+                                    ],
+                                  ),
+                                ),
                               ),
-                            ),
-                          ),
-                        );
-                      },
-                    ),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
-                ],
+                ),
               ),
             ),
           ),
@@ -510,10 +520,12 @@ Future<T?> showInkModal<T>({
         child: Dialog(
           backgroundColor: Colors.transparent,
           insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
-          child: FloatingCard(
-            frosted: true,
-            radius: 26,
-            padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 460),
+            child: FloatingCard(
+              frosted: true,
+              radius: 22,
+              padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
             child: SingleChildScrollView(
               child: Column(
                 mainAxisSize: MainAxisSize.min,
@@ -552,6 +564,7 @@ Future<T?> showInkModal<T>({
               ),
             ),
           ),
+        ),
         ),
       );
     },

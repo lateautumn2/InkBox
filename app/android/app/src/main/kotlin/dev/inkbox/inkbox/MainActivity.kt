@@ -1,20 +1,29 @@
 package dev.inkbox.inkbox
 
 import android.app.Activity
+import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.pdf.PdfRenderer
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.media.MediaPlayer
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
 import android.provider.Settings
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import android.util.Base64
 import android.view.KeyEvent
 import android.view.WindowManager
 import androidx.documentfile.provider.DocumentFile
@@ -26,9 +35,14 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.security.KeyStore
 import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipFile
+import javax.crypto.Cipher
+import javax.crypto.KeyGenerator
+import javax.crypto.SecretKey
+import javax.crypto.spec.GCMParameterSpec
 
 class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     private val methodChannelName = "dev.inkbox/platform"
@@ -48,7 +62,14 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     private var ttsInitializing = false
     private var currentTtsEngine: String = ""
     private var pendingSpeakAction: ((Boolean) -> Unit)? = null
+    private var pendingSpeakTimeout: Runnable? = null
     private var pendingIncomingUri: Uri? = null
+
+    private var mediaPlayer: MediaPlayer? = null
+    private var activeAudioPlaybackId: String? = null
+    private var audioFocusRequest: AudioFocusRequest? = null
+    private val keystoreAlias = "inkbox_tts_secrets_key"
+    private val securePrefsName = "inkbox_secure_prefs"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -80,15 +101,17 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     }
 
     override fun onDestroy() {
+        pendingSpeakTimeout?.let { mainHandler.removeCallbacks(it) }
+        pendingSpeakTimeout = null
         pendingSpeakAction = null
         tts?.stop()
         tts?.shutdown()
         tts = null
+        releaseMediaPlayer(abandonFocus = true)
         super.onDestroy()
     }
 
     private fun configureTtsListener(instance: TextToSpeech?) {
-        instance?.language = Locale.CHINA
         instance?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
             override fun onStart(utteranceId: String?) {
                 emitEvent("tts_start", mapOf("utteranceId" to (utteranceId ?: "")))
@@ -96,6 +119,13 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
 
             override fun onDone(utteranceId: String?) {
                 emitEvent("tts_done", mapOf("utteranceId" to (utteranceId ?: "")))
+            }
+
+            override fun onError(utteranceId: String?, errorCode: Int) {
+                emitEvent(
+                    "tts_error",
+                    mapOf("utteranceId" to (utteranceId ?: ""), "errorCode" to errorCode)
+                )
             }
 
             @Deprecated("Deprecated in Java")
@@ -134,6 +164,8 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
 
     override fun onInit(status: Int) {
         ttsInitializing = false
+        pendingSpeakTimeout?.let { mainHandler.removeCallbacks(it) }
+        pendingSpeakTimeout = null
         if (status == TextToSpeech.SUCCESS) {
             ttsReady = true
             configureTtsListener(tts)
@@ -264,21 +296,35 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                         val pitch = (call.argument<Double>("pitch") ?: 1.0).toFloat().coerceIn(0.5f, 2.0f)
                         val language = call.argument<String>("language")
                         val requestedEngine = call.argument<String>("engine")?.trim() ?: ""
+                        val requestedVoice = call.argument<String>("voiceName")?.trim() ?: ""
 
                         fun performSpeak(): String? {
                             val active = tts ?: return null
                             if (!ttsReady || text.isBlank()) return null
-                            try {
-                                val targetLocale = resolveTtsLocale(language)
-                                val avail = active.isLanguageAvailable(targetLocale)
-                                if (avail >= TextToSpeech.LANG_AVAILABLE) {
-                                    active.language = targetLocale
-                                } else if (containsCjk(text)) {
-                                    active.language = Locale.CHINA
-                                } else {
-                                    active.language = targetLocale
+                            var voiceApplied = false
+                            if (requestedVoice.isNotEmpty()) {
+                                try {
+                                    val match = active.voices?.firstOrNull { it.name == requestedVoice }
+                                    if (match != null) {
+                                        active.voice = match
+                                        voiceApplied = true
+                                    }
+                                } catch (_: Exception) {
                                 }
-                            } catch (_: Exception) {
+                            }
+                            if (!voiceApplied) {
+                                try {
+                                    val targetLocale = resolveTtsLocale(language)
+                                    val avail = active.isLanguageAvailable(targetLocale)
+                                    if (avail >= TextToSpeech.LANG_AVAILABLE) {
+                                        active.language = targetLocale
+                                    } else if (containsCjk(text)) {
+                                        active.language = Locale.CHINA
+                                    } else {
+                                        active.language = targetLocale
+                                    }
+                                } catch (_: Exception) {
+                                }
                             }
                             active.setSpeechRate(rate)
                             active.setPitch(pitch)
@@ -288,8 +334,15 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                         }
 
                         // Cancel any superseded pending speak callback cleanly
+                        pendingSpeakTimeout?.let { mainHandler.removeCallbacks(it) }
+                        pendingSpeakTimeout = null
                         pendingSpeakAction?.invoke(false)
                         pendingSpeakAction = null
+
+                        if (text.isBlank()) {
+                            result.success(null)
+                            return@setMethodCallHandler
+                        }
 
                         if (requestedEngine != currentTtsEngine || (!ttsReady && !ttsInitializing)) {
                             tts?.stop()
@@ -300,15 +353,37 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             currentTtsEngine = requestedEngine
 
                             var responded = false
-                            fun finishWith(uid: String?) {
+                            fun deliverSpeakResult(ok: Boolean, timedOut: Boolean = false) {
                                 if (responded) return
                                 responded = true
-                                mainHandler.post { result.success(uid) }
+                                pendingSpeakTimeout?.let { mainHandler.removeCallbacks(it) }
+                                pendingSpeakTimeout = null
+                                mainHandler.post {
+                                    when {
+                                        timedOut -> result.error("ERR_TTS_TIMEOUT", "TTS init timeout", null)
+                                        !ok -> result.error("ERR_TTS_UNAVAILABLE", "TTS engine unavailable", null)
+                                        else -> {
+                                            val uid = performSpeak()
+                                            if (uid != null) {
+                                                result.success(uid)
+                                            } else {
+                                                result.error("ERR_TTS_SPEAK_FAILED", "TTS speak failed", null)
+                                            }
+                                        }
+                                    }
+                                }
                             }
 
-                            pendingSpeakAction = { ok ->
-                                finishWith(if (ok) performSpeak() else null)
+                            pendingSpeakAction = { ok -> deliverSpeakResult(ok) }
+                            val watchdog = Runnable {
+                                if (!responded) {
+                                    ttsInitializing = false
+                                    pendingSpeakAction = null
+                                    deliverSpeakResult(ok = false, timedOut = true)
+                                }
                             }
+                            pendingSpeakTimeout = watchdog
+                            mainHandler.postDelayed(watchdog, 5000L)
 
                             var syncFired = false
                             var syncStatus = TextToSpeech.ERROR
@@ -331,18 +406,49 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             }
                         } else if (ttsInitializing) {
                             var responded = false
+                            val watchdog = Runnable {
+                                if (!responded) {
+                                    responded = true
+                                    ttsInitializing = false
+                                    pendingSpeakAction = null
+                                    result.error("ERR_TTS_TIMEOUT", "TTS init timeout", null)
+                                }
+                            }
+                            pendingSpeakTimeout = watchdog
+                            mainHandler.postDelayed(watchdog, 5000L)
+
                             pendingSpeakAction = { ok ->
                                 if (!responded) {
                                     responded = true
-                                    mainHandler.post { result.success(if (ok) performSpeak() else null) }
+                                    pendingSpeakTimeout?.let { mainHandler.removeCallbacks(it) }
+                                    pendingSpeakTimeout = null
+                                    mainHandler.post {
+                                        if (!ok) {
+                                            result.error("ERR_TTS_UNAVAILABLE", "TTS engine unavailable", null)
+                                        } else {
+                                            val uid = performSpeak()
+                                            if (uid != null) {
+                                                result.success(uid)
+                                            } else {
+                                                result.error("ERR_TTS_SPEAK_FAILED", "TTS speak failed", null)
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         } else {
-                            result.success(performSpeak())
+                            val uid = performSpeak()
+                            if (uid != null) {
+                                result.success(uid)
+                            } else {
+                                result.error("ERR_TTS_SPEAK_FAILED", "TTS speak failed", null)
+                            }
                         }
                     }
 
                     "stopTts" -> {
+                        pendingSpeakTimeout?.let { mainHandler.removeCallbacks(it) }
+                        pendingSpeakTimeout = null
                         pendingSpeakAction?.invoke(false)
                         pendingSpeakAction = null
                         tts?.stop()
@@ -350,14 +456,189 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                     }
 
                     "getTtsEngines" -> {
-                        val list = try {
+                        val engines = try {
                             tts?.engines?.map { e ->
                                 mapOf("name" to e.name, "label" to e.label)
                             } ?: emptyList()
                         } catch (_: Exception) {
                             emptyList()
                         }
-                        result.success(list)
+                        if (engines.isNotEmpty()) {
+                            result.success(engines)
+                        } else {
+                            val fallbackList = try {
+                                packageManager.queryIntentServices(
+                                    Intent("android.intent.action.TTS_SERVICE"),
+                                    0
+                                ).map { ri ->
+                                    mapOf(
+                                        "name" to (ri.serviceInfo?.packageName ?: ""),
+                                        "label" to ri.loadLabel(packageManager).toString()
+                                    )
+                                }.filter { (it["name"] ?: "").isNotEmpty() }
+                            } catch (_: Exception) {
+                                emptyList()
+                            }
+                            result.success(fallbackList)
+                        }
+                    }
+
+                    "getTtsVoices" -> {
+                        val langFilter = call.argument<String>("language")?.trim() ?: ""
+                        val voices = try {
+                            tts?.voices?.toList() ?: emptyList()
+                        } catch (_: Exception) {
+                            emptyList()
+                        }
+                        val langPrefix = if (langFilter.isEmpty() || langFilter == "system") {
+                            ""
+                        } else {
+                            langFilter.split('-', '_').firstOrNull()?.lowercase(Locale.ROOT) ?: ""
+                        }
+                        val filtered = if (langPrefix.isEmpty()) {
+                            voices
+                        } else {
+                            val matched = voices.filter {
+                                it.locale.language.lowercase(Locale.ROOT) == langPrefix
+                            }
+                            matched.ifEmpty { voices }
+                        }
+                        val sorted = filtered.sortedWith(
+                            compareBy<android.speech.tts.Voice>(
+                                { it.isNetworkConnectionRequired },
+                                { -(it.quality) },
+                                { it.name }
+                            )
+                        )
+                        result.success(
+                            sorted.map { v ->
+                                mapOf(
+                                    "name" to v.name,
+                                    "locale" to v.locale.toLanguageTag(),
+                                    "quality" to v.quality,
+                                    "requiresNetwork" to v.isNetworkConnectionRequired
+                                )
+                            }
+                        )
+                    }
+
+                    "playAudioFile" -> {
+                        val path = call.argument<String>("path") ?: ""
+                        val speed = (call.argument<Double>("speed") ?: 1.0).toFloat().coerceIn(0.4f, 2.5f)
+                        val playbackId = call.argument<String>("playbackId") ?: UUID.randomUUID().toString()
+                        val file = File(path)
+                        if (!file.exists() || file.length() <= 0) {
+                            result.success(false)
+                            return@setMethodCallHandler
+                        }
+                        try {
+                            releaseMediaPlayer(abandonFocus = false)
+                            requestSpeechAudioFocus()
+                            val mp = MediaPlayer()
+                            mp.setAudioAttributes(
+                                AudioAttributes.Builder()
+                                    .setUsage(AudioAttributes.USAGE_MEDIA)
+                                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                                    .build()
+                            )
+                            mp.setDataSource(file.absolutePath)
+                            mp.prepare()
+                            mp.setOnCompletionListener {
+                                val pid = activeAudioPlaybackId ?: playbackId
+                                releaseMediaPlayer(abandonFocus = true)
+                                emitEvent("audio_done", mapOf("playbackId" to pid))
+                            }
+                            mp.setOnErrorListener { _, what, extra ->
+                                val pid = activeAudioPlaybackId ?: playbackId
+                                releaseMediaPlayer(abandonFocus = true)
+                                emitEvent(
+                                    "audio_error",
+                                    mapOf("playbackId" to pid, "what" to what, "extra" to extra)
+                                )
+                                true
+                            }
+                            mediaPlayer = mp
+                            activeAudioPlaybackId = playbackId
+                            mp.start()
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                                try {
+                                    val params = mp.playbackParams
+                                    mp.playbackParams = params.setSpeed(speed)
+                                } catch (_: Exception) {
+                                }
+                            }
+                            emitEvent("audio_start", mapOf("playbackId" to playbackId))
+                            result.success(true)
+                        } catch (_: Exception) {
+                            releaseMediaPlayer(abandonFocus = true)
+                            emitEvent("audio_error", mapOf("playbackId" to playbackId))
+                            result.success(false)
+                        }
+                    }
+
+                    "pauseAudio" -> {
+                        try {
+                            mediaPlayer?.takeIf { it.isPlaying }?.pause()
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+
+                    "resumeAudio" -> {
+                        try {
+                            requestSpeechAudioFocus()
+                            mediaPlayer?.takeIf { !it.isPlaying }?.start()
+                        } catch (_: Exception) {
+                        }
+                        result.success(null)
+                    }
+
+                    "stopAudio" -> {
+                        releaseMediaPlayer(abandonFocus = true)
+                        result.success(null)
+                    }
+
+                    "setAudioSpeed" -> {
+                        val speed = (call.argument<Double>("speed") ?: 1.0).toFloat().coerceIn(0.4f, 2.5f)
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                            try {
+                                mediaPlayer?.let { mp ->
+                                    val wasPlaying = mp.isPlaying
+                                    val params = mp.playbackParams
+                                    mp.playbackParams = params.setSpeed(speed)
+                                    if (!wasPlaying && mp.isPlaying) {
+                                        mp.pause()
+                                    }
+                                }
+                            } catch (_: Exception) {
+                            }
+                        }
+                        result.success(null)
+                    }
+
+                    "saveSecret" -> {
+                        val key = call.argument<String>("key") ?: ""
+                        val value = call.argument<String>("value") ?: ""
+                        if (key.isNotEmpty()) {
+                            saveEncryptedSecret(key, value)
+                        }
+                        result.success(null)
+                    }
+
+                    "readSecret" -> {
+                        val key = call.argument<String>("key") ?: ""
+                        result.success(if (key.isNotEmpty()) readEncryptedSecret(key) else null)
+                    }
+
+                    "deleteSecret" -> {
+                        val key = call.argument<String>("key") ?: ""
+                        if (key.isNotEmpty()) {
+                            getSharedPreferences(securePrefsName, Context.MODE_PRIVATE)
+                                .edit()
+                                .remove(key)
+                                .apply()
+                        }
+                        result.success(null)
                     }
 
                     "openSystemTtsSettings" -> {
@@ -721,6 +1002,104 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
         }
         walk(root, 0)
         return results
+    }
+
+    private fun requestSpeechAudioFocus() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val attrs = AudioAttributes.Builder()
+                .setUsage(AudioAttributes.USAGE_MEDIA)
+                .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+                .build()
+            val req = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+                .setAudioAttributes(attrs)
+                .build()
+            audioFocusRequest = req
+            am.requestAudioFocus(req)
+        } else {
+            @Suppress("DEPRECATION")
+            am.requestAudioFocus(null, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+        }
+    }
+
+    private fun abandonSpeechAudioFocus() {
+        val am = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            audioFocusRequest?.let { am.abandonAudioFocusRequest(it) }
+            audioFocusRequest = null
+        } else {
+            @Suppress("DEPRECATION")
+            am.abandonAudioFocus(null)
+        }
+    }
+
+    private fun releaseMediaPlayer(abandonFocus: Boolean) {
+        try {
+            mediaPlayer?.stop()
+        } catch (_: Exception) {
+        }
+        try {
+            mediaPlayer?.reset()
+        } catch (_: Exception) {
+        }
+        try {
+            mediaPlayer?.release()
+        } catch (_: Exception) {
+        }
+        mediaPlayer = null
+        activeAudioPlaybackId = null
+        if (abandonFocus) {
+            abandonSpeechAudioFocus()
+        }
+    }
+
+    private fun getOrCreateSecretKey(): SecretKey {
+        val ks = KeyStore.getInstance("AndroidKeyStore")
+        ks.load(null)
+        val existing = ks.getKey(keystoreAlias, null) as? SecretKey
+        if (existing != null) return existing
+        val keyGen = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, "AndroidKeyStore")
+        val spec = KeyGenParameterSpec.Builder(
+            keystoreAlias,
+            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT
+        )
+            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+            .setKeySize(256)
+            .build()
+        keyGen.init(spec)
+        return keyGen.generateKey()
+    }
+
+    private fun saveEncryptedSecret(key: String, value: String) {
+        try {
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.ENCRYPT_MODE, getOrCreateSecretKey())
+            val encrypted = cipher.doFinal(value.toByteArray(Charsets.UTF_8))
+            val ivB64 = Base64.encodeToString(cipher.iv, Base64.NO_WRAP)
+            val dataB64 = Base64.encodeToString(encrypted, Base64.NO_WRAP)
+            getSharedPreferences(securePrefsName, Context.MODE_PRIVATE)
+                .edit()
+                .putString(key, "$ivB64:$dataB64")
+                .apply()
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun readEncryptedSecret(key: String): String? {
+        return try {
+            val stored = getSharedPreferences(securePrefsName, Context.MODE_PRIVATE)
+                .getString(key, null) ?: return null
+            val parts = stored.split(':')
+            if (parts.size != 2) return null
+            val iv = Base64.decode(parts[0], Base64.NO_WRAP)
+            val data = Base64.decode(parts[1], Base64.NO_WRAP)
+            val cipher = Cipher.getInstance("AES/GCM/NoPadding")
+            cipher.init(Cipher.DECRYPT_MODE, getOrCreateSecretKey(), GCMParameterSpec(128, iv))
+            String(cipher.doFinal(data), Charsets.UTF_8)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun emitEvent(type: String, payload: Map<String, Any>) {

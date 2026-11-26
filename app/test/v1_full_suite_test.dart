@@ -45,6 +45,7 @@ class _FakePlatformBridge implements PlatformBridge {
     double pitch = 1.0,
     String? language,
     String? engine,
+    String? voiceName,
   }) async =>
       'u1';
   @override
@@ -55,7 +56,34 @@ class _FakePlatformBridge implements PlatformBridge {
   @override
   Future<List<TtsEngineOption>> getTtsEngines() async => const [];
   @override
+  Future<List<TtsVoiceOption>> getTtsVoices({
+    String? engine,
+    String? language,
+  }) async =>
+      const [];
+  @override
   Future<void> openSystemTtsSettings() async {}
+  @override
+  Future<bool> playAudioFile(
+    String path, {
+    double speed = 1.0,
+    String? playbackId,
+  }) async =>
+      true;
+  @override
+  Future<void> pauseAudio() async {}
+  @override
+  Future<void> resumeAudio() async {}
+  @override
+  Future<void> stopAudio() async {}
+  @override
+  Future<void> setAudioSpeed(double speed) async {}
+  @override
+  Future<void> saveSecret(String key, String value) async {}
+  @override
+  Future<String?> readSecret(String key) async => null;
+  @override
+  Future<void> deleteSecret(String key) async {}
   @override
   Future<int> getPdfPageCount(String path) async => 0;
   @override

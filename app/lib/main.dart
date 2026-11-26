@@ -5,11 +5,13 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'core/l10n/l10n_helpers.dart';
 import 'core/navigation/app_router.dart';
 import 'core/theme/inkbox_theme.dart';
 import 'core/theme/theme_controller.dart';
 import 'data/platform/platform_bridge.dart';
 import 'data/providers/app_providers.dart';
+import 'l10n/app_localizations.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
@@ -90,11 +92,25 @@ class _InkBoxAppState extends ConsumerState<InkBoxApp> {
         );
 
         return MaterialApp.router(
-          title: '墨匣 InkBox',
+          onGenerateTitle: (ctx) => AppLocalizations.of(ctx).appName,
           debugShowCheckedModeBanner: false,
           theme: lightTheme,
           darkTheme: darkTheme,
           themeMode: appearance.themeMode,
+          locale: appearance.resolvedLocale,
+          localizationsDelegates: kInkBoxLocalizationsDelegates,
+          supportedLocales: const [
+            Locale('zh'),
+            Locale('en'),
+            Locale('ja'),
+          ],
+          localeResolutionCallback: (deviceLocale, supported) {
+            if (deviceLocale == null) return const Locale('zh');
+            for (final s in supported) {
+              if (s.languageCode == deviceLocale.languageCode) return s;
+            }
+            return const Locale('en');
+          },
           routerConfig: appRouter,
         );
       },

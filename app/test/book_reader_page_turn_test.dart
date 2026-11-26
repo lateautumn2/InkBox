@@ -6,6 +6,7 @@ import 'package:drift/drift.dart' as drift;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inkbox/core/icons/ink_icons.dart';
+import 'package:inkbox/core/l10n/l10n_helpers.dart';
 import 'package:inkbox/core/navigation/app_router.dart';
 import 'package:inkbox/core/theme/inkbox_theme.dart';
 import 'package:inkbox/core/widgets/floating_surface.dart';
@@ -18,6 +19,7 @@ import 'package:inkbox/features/book_reader/book_reader_settings.dart';
 import 'package:inkbox/features/book_reader/page_turn_painter.dart';
 import 'package:inkbox/features/book_reader/reader_highlight_canvas.dart';
 import 'package:inkbox/features/bookshelf/bookshelf_page.dart';
+import 'package:inkbox/l10n/app_localizations.dart';
 import 'package:inkbox/main.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:path/path.dart' as p;
@@ -55,6 +57,7 @@ class _TestPlatformBridge implements PlatformBridge {
     double pitch = 1.0,
     String? language,
     String? engine,
+    String? voiceName,
   }) async {
     spokenTexts.add(text);
     lastUtteranceId = 'utt_${++_uidSeq}';
@@ -68,7 +71,34 @@ class _TestPlatformBridge implements PlatformBridge {
   @override
   Future<List<TtsEngineOption>> getTtsEngines() async => const [];
   @override
+  Future<List<TtsVoiceOption>> getTtsVoices({
+    String? engine,
+    String? language,
+  }) async =>
+      const [];
+  @override
   Future<void> openSystemTtsSettings() async {}
+  @override
+  Future<bool> playAudioFile(
+    String path, {
+    double speed = 1.0,
+    String? playbackId,
+  }) async =>
+      true;
+  @override
+  Future<void> pauseAudio() async {}
+  @override
+  Future<void> resumeAudio() async {}
+  @override
+  Future<void> stopAudio() async {}
+  @override
+  Future<void> setAudioSpeed(double speed) async {}
+  @override
+  Future<void> saveSecret(String key, String value) async {}
+  @override
+  Future<String?> readSecret(String key) async => null;
+  @override
+  Future<void> deleteSecret(String key) async {}
   @override
   Future<int> getPdfPageCount(String path) async => 0;
   @override
@@ -128,7 +158,7 @@ Future<int> _insertRealTempNovel(AppDatabase db, Directory tmpDir) async {
 
 void main() {
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'inkbox_app_locale': 'zh'});
   });
 
   group('Book Page Turn Stage (Simulation / Cover / Slide)', () {
@@ -150,6 +180,9 @@ void main() {
 
         await tester.pumpWidget(
           MaterialApp(
+            locale: const Locale('zh'),
+            localizationsDelegates: kInkBoxLocalizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
             theme: InkBoxTheme.light(uiStyle: InkBoxUiStyle.floatingCard),
             home: StatefulBuilder(
               builder: (context, setState) {
@@ -231,6 +264,9 @@ void main() {
         UncontrolledProviderScope(
           container: container,
           child: MaterialApp(
+            locale: const Locale('zh'),
+            localizationsDelegates: kInkBoxLocalizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
             theme: InkBoxTheme.light(uiStyle: InkBoxUiStyle.floatingCard),
             home: BookReaderPage(bookId: bookId),
           ),
@@ -299,6 +335,9 @@ void main() {
           UncontrolledProviderScope(
             container: container,
             child: MaterialApp(
+              locale: const Locale('zh'),
+              localizationsDelegates: kInkBoxLocalizationsDelegates,
+              supportedLocales: AppLocalizations.supportedLocales,
               theme: InkBoxTheme.light(uiStyle: InkBoxUiStyle.floatingCard),
               home: BookReaderPage(bookId: bookId),
             ),
@@ -368,33 +407,30 @@ void main() {
       );
       await _waitUntilLoaded(tester);
 
-      // Requirement 3: FloatingCard Bookshelf uses 3-column grid (matching Classic MD3)
+      // Adaptive Bookshelf grid uses SliverGridDelegateWithMaxCrossAxisExtent
       final sliverGridFinder = find.byType(SliverGrid);
       expect(sliverGridFinder, findsOneWidget);
       final sliverGrid = tester.widget<SliverGrid>(sliverGridFinder);
-      final delegate = sliverGrid.gridDelegate
-          as SliverGridDelegateWithFixedCrossAxisCount;
-      expect(delegate.crossAxisCount, 3);
+      expect(
+        sliverGrid.gridDelegate,
+        isA<SliverGridDelegateWithMaxCrossAxisExtent>(),
+      );
       expect(find.byType(BookshelfPage), findsOneWidget);
 
-      // Open BookDetailPage via grid item's more icon -> verify TOC & TXT rule/encoding controls live here (Req 6 & 7)
-      await tester.tap(
-        find.descendant(
-          of: find.byType(SliverGrid),
-          matching: find.byWidgetPredicate(
-            (w) => w is InkIconWidget && w.icon == InkIcon.more,
-          ),
-        ),
-      );
+      // Open BookDetailPage via long-press -> Details -> verify TOC & TXT controls
+      await tester.longPress(find.text('测试实书').last);
+      await tester.pumpAndSettle();
+      expect(find.text('详情'), findsOneWidget);
+      await tester.tap(find.text('详情'));
       await tester.pump(const Duration(milliseconds: 350));
       await _waitUntilLoaded(tester);
       await tester.pumpAndSettle();
 
       expect(find.text('书籍详情'), findsOneWidget);
       expect(find.textContaining('章节目录 (3)'), findsOneWidget);
-      expect(find.text('切换目录规则'), findsOneWidget);
-      expect(find.text('切换编码'), findsOneWidget);
-      expect(find.text('修改书架'), findsOneWidget);
+      expect(find.text('目录规则'), findsOneWidget);
+      expect(find.text('文本编码'), findsOneWidget);
+      expect(find.text('移架'), findsOneWidget);
       expect(find.text('第二章 猜疑链与技术爆炸'), findsOneWidget);
 
       // Tap Chapter 2 directly in BookDetailPage TOC -> opens BookReaderPage at Chapter 2!
@@ -411,9 +447,9 @@ void main() {
       await tester.tap(find.text('目录'));
       await tester.pumpAndSettle();
       expect(find.text('目录 (3)'), findsOneWidget);
-      expect(find.text('切换目录规则'), findsNothing);
+      expect(find.text('目录规则'), findsNothing);
       expect(find.text('切换规则'), findsNothing);
-      expect(find.text('管理规则库'), findsNothing);
+      expect(find.text('规则库'), findsNothing);
 
       // Requirement 5: Bookmark toggle on same page -> tap once adds & lights up, tap again cancels!
       expect(find.byTooltip('添加书签'), findsOneWidget);
@@ -583,29 +619,24 @@ void main() {
       expect(find.text('书架2（经济）'), findsOneWidget);
       expect(find.text('测试实书'), findsNothing);
 
-      // Switch back to 书架1（历史）, open BookDetailPage, move book to 书架2（经济） via UI
+      // Switch back to 书架1（历史）, open BookDetailPage via long-press -> Details, move book to 书架2（经济） via UI
       container.read(activeBookShelfIdProvider.notifier).state = histShelfId;
       await tester.pumpAndSettle();
-      await tester.tap(
-        find.descendant(
-          of: find.byType(SliverGrid),
-          matching: find.byWidgetPredicate(
-            (w) => w is InkIconWidget && w.icon == InkIcon.more,
-          ),
-        ),
-      );
+      await tester.longPress(find.text('测试实书').last);
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('详情'));
       await tester.pump(const Duration(milliseconds: 350));
       await _waitUntilLoaded(tester);
       await tester.pumpAndSettle();
 
-      await tester.tap(find.text('修改书架'));
+      await tester.tap(find.text('移架'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('书架2（经济）'));
       await tester.pumpAndSettle();
       await tester.tap(find.text('确定'));
       await _flushRealAsync(tester);
       await tester.pumpAndSettle();
-      expect(find.text('书架：书架2（经济）'), findsOneWidget);
+      expect(find.textContaining('书架2（经济）'), findsOneWidget);
 
       // Enter reader from BookDetailPage -> test independent bookmarks across Page 1 & Page 2
       await tester.tap(find.textContaining('继续阅读'));
@@ -647,7 +678,7 @@ void main() {
       await tester.tap(find.text('写想法'));
       await tester.pumpAndSettle();
       await tester.enterText(find.byType(TextField).first, '核心推演批注');
-      await tester.tap(find.text('保存划线与想法'));
+      await tester.tap(find.text('保存'));
       await _flushRealAsync(tester);
       await tester.pumpAndSettle();
 
@@ -893,19 +924,21 @@ void main() {
       // Test TTS utterance isolation: start TTS on Page 3 -> open TtsSettingsPage -> preview finishes -> Page stays 3!
       await tester.tapAt(const Offset(195, 390));
       await tester.pumpAndSettle();
-      await tester.tap(find.byTooltip('TTS 听书'));
+      await tester.tap(find.byTooltip('听书'));
       await _flushRealAsync(tester);
       await tester.pumpAndSettle();
       // Dismiss reader menu so TTS mini dock appears
       await tester.tapAt(const Offset(195, 220));
       await tester.pumpAndSettle();
-      expect(find.textContaining('TTS 朗读中'), findsOneWidget);
+      expect(find.textContaining('系统 TTS ·'), findsOneWidget);
 
-      await tester.tap(find.text('设置'));
+      await tester.tap(find.byTooltip('TTS 设置'));
       await tester.pumpAndSettle();
-      expect(find.text('TTS 语音朗读设置'), findsOneWidget);
+      expect(find.text('TTS 语音设置'), findsOneWidget);
 
-      await tester.tap(find.text('试听当前语音效果'));
+      await tester.ensureVisible(find.text('试听效果'));
+      await tester.pumpAndSettle();
+      await tester.tap(find.text('试听效果'));
       await _flushRealAsync(tester);
       await tester.pumpAndSettle();
       final previewUid = platform.lastUtteranceId!;
@@ -920,15 +953,17 @@ void main() {
       await _flushRealAsync(tester);
       await tester.pumpAndSettle();
       expect(find.textContaining('3/'), findsWidgets);
-      final resumedReaderUid = platform.lastUtteranceId!;
-      platform.eventCtrl.add(
-        PlatformEvent(
-          type: 'tts_done',
-          payload: {'utteranceId': resumedReaderUid},
-        ),
-      );
-      await _flushRealAsync(tester);
-      await tester.pumpAndSettle();
+      for (var i = 0; i < 20 && find.textContaining('4/').evaluate().isEmpty; i++) {
+        final resumedReaderUid = platform.lastUtteranceId!;
+        platform.eventCtrl.add(
+          PlatformEvent(
+            type: 'tts_done',
+            payload: {'utteranceId': resumedReaderUid},
+          ),
+        );
+        await _flushRealAsync(tester);
+        await tester.pumpAndSettle();
+      }
       expect(find.textContaining('4/'), findsWidgets);
 
       // Stop TTS

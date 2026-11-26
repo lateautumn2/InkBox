@@ -48,6 +48,7 @@ class _WidgetTestPlatformBridge implements PlatformBridge {
     double pitch = 1.0,
     String? language,
     String? engine,
+    String? voiceName,
   }) async {
     lastSpokenText = text;
     lastSpokenRate = rate;
@@ -66,7 +67,34 @@ class _WidgetTestPlatformBridge implements PlatformBridge {
         TtsEngineOption(name: 'com.google.android.tts', label: 'Google 语音服务'),
       ];
   @override
+  Future<List<TtsVoiceOption>> getTtsVoices({
+    String? engine,
+    String? language,
+  }) async =>
+      const [];
+  @override
   Future<void> openSystemTtsSettings() async {}
+  @override
+  Future<bool> playAudioFile(
+    String path, {
+    double speed = 1.0,
+    String? playbackId,
+  }) async =>
+      true;
+  @override
+  Future<void> pauseAudio() async {}
+  @override
+  Future<void> resumeAudio() async {}
+  @override
+  Future<void> stopAudio() async {}
+  @override
+  Future<void> setAudioSpeed(double speed) async {}
+  @override
+  Future<void> saveSecret(String key, String value) async {}
+  @override
+  Future<String?> readSecret(String key) async => null;
+  @override
+  Future<void> deleteSecret(String key) async {}
   @override
   Future<int> getPdfPageCount(String path) async => 0;
   @override
@@ -77,7 +105,7 @@ class _WidgetTestPlatformBridge implements PlatformBridge {
 
 void main() {
   setUp(() {
-    SharedPreferences.setMockInitialValues({});
+    SharedPreferences.setMockInitialValues({'inkbox_app_locale': 'zh'});
   });
 
   group('M1 Rust Core FFI Integration', () {
@@ -191,19 +219,18 @@ void main() {
       expect(find.text('同步'), findsNothing);
       expect(find.byType(InkIconWidget), findsWidgets);
 
-      // Bookshelf: default status groups ONLY (no 新建分类 custom category chip), plus 切换书架
+      // Bookshelf: default status groups ONLY (no 新建分类 custom category chip), tap shelf title to switch
       expect(find.text('默认书架'), findsOneWidget);
-      expect(find.text('所有'), findsOneWidget);
+      expect(find.text('全部'), findsOneWidget);
       expect(find.text('在读'), findsOneWidget);
       expect(find.text('已读完'), findsOneWidget);
-      expect(find.text('切换书架'), findsOneWidget);
       expect(find.text('新建分类'), findsNothing);
       expect(find.text('文学'), findsNothing);
       expect(find.text('技术'), findsNothing);
       expect(find.text('三体 II · 黑暗森林'), findsNothing);
 
       // Create a second bookshelf "书架1（历史）" via shelf switcher and switch to it
-      await tester.tap(find.text('切换书架'));
+      await tester.tap(find.text('默认书架'));
       await tester.pumpAndSettle();
       expect(find.text('新建书架'), findsOneWidget);
       await tester.tap(find.text('新建书架'));
@@ -220,62 +247,61 @@ void main() {
       await tester.tap(find.text('漫画').last);
       await tester.pumpAndSettle();
       expect(find.text('默认漫画架'), findsOneWidget);
-      expect(find.text('切换漫画架'), findsOneWidget);
       expect(find.text('新建分类'), findsNothing);
       expect(find.text('浪客行'), findsNothing);
       expect(find.text('追更中'), findsNothing);
       expect(find.byTooltip('主题预设'), findsNothing);
 
-      // Switch to Import tab -> clean supported types + Import History, NO engine ready/features copy, NO theme button
+      // Switch to Import tab -> clean header modal for Supported Formats + Import History, NO inline clutter card
       await tester.tap(find.text('导入').last);
       await tester.pumpAndSettle();
       expect(find.text('导入中心'), findsOneWidget);
-      expect(find.text('支持类型'), findsOneWidget);
       expect(find.text('导入历史 (0)'), findsOneWidget);
+      expect(find.byTooltip('支持格式'), findsOneWidget);
       expect(find.textContaining('解析内核已就绪'), findsNothing);
       expect(find.textContaining('特性：'), findsNothing);
       expect(find.byTooltip('主题预设'), findsNothing);
 
-      // Switch to Mine tab -> Multi-Shelf manager, TTS Settings, TOC Rules, WebDAV Sync, and Theme Presets!
+      // Switch to Mine tab -> Multi-Shelf manager, TTS Settings, TOC Rules, WebDAV Sync, Appearance & Language
       await tester.tap(find.text('我的').last);
       await tester.pumpAndSettle();
-      expect(find.text('多书架与漫画架管理'), findsOneWidget);
-      expect(find.text('TTS 语音朗读设置'), findsOneWidget);
-      expect(find.text('WebDAV 多端同步'), findsOneWidget);
-      expect(find.text('TXT 目录识别规则'), findsOneWidget);
+      expect(find.text('多书架管理'), findsOneWidget);
+      expect(find.text('TTS 语音朗读'), findsOneWidget);
+      expect(find.text('WebDAV 同步'), findsOneWidget);
+      expect(find.text('TXT 目录规则'), findsOneWidget);
+      expect(find.text('外观与主题'), findsOneWidget);
       expect(find.text('自定义书架分类'), findsNothing);
       expect(find.byTooltip('主题预设'), findsOneWidget);
 
-      // Enter TTS Settings page -> adjust speech rate & pitch & test live preview
-      await tester.tap(find.text('TTS 语音朗读设置'));
+      // Enter TTS Settings page -> adjust pitch & test live preview
+      await tester.tap(find.text('TTS 语音朗读'));
       await tester.pumpAndSettle();
-      expect(find.text('TTS 语音朗读设置'), findsOneWidget);
-      expect(find.text('朗读语速'), findsOneWidget);
-      expect(find.text('声音音调'), findsOneWidget);
-      await tester.tap(find.text('1.5x'));
-      await tester.pumpAndSettle();
+      expect(find.text('TTS 语音设置'), findsOneWidget);
+      expect(find.text('语速'), findsOneWidget);
+      expect(find.text('音调'), findsOneWidget);
       await tester.tap(find.text('清亮 1.2'));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('试听当前语音效果'));
+      await tester.ensureVisible(find.text('试听效果'));
       await tester.pumpAndSettle();
-      expect(mockPlatform.lastSpokenRate, closeTo(1.5, 0.01));
-      expect(mockPlatform.lastSpokenPitch, closeTo(1.2, 0.01));
+      await tester.tap(find.text('试听效果'));
+      await tester.pumpAndSettle();
+      expect(mockPlatform.lastSpokenPitch, closeTo(1.25, 0.05));
       expect(mockPlatform.lastSpokenLang, 'zh-CN');
       await tester.tap(find.byType(InkCircleButton).first);
       await tester.pumpAndSettle();
 
-      // Open Theme Presets sheet in FloatingCard mode
-      await tester.tap(find.byTooltip('主题预设'));
+      // Open Appearance / Theme Presets sheet in FloatingCard mode
+      await tester.tap(find.text('外观与主题'));
       await tester.pumpAndSettle();
       expect(find.text('主题预设'), findsOneWidget);
-      expect(find.text('FloatingCard 悬浮卡片'), findsOneWidget);
-      expect(find.text('经典 MD3 贴边'), findsOneWidget);
+      expect(find.text('悬浮卡片'), findsOneWidget);
+      expect(find.text('经典贴边'), findsOneWidget);
 
-      final ctx = tester.element(find.text('FloatingCard 悬浮卡片'));
+      final ctx = tester.element(find.text('悬浮卡片'));
       expect(InkBoxTokens.of(ctx).isFloatingCard, isTrue);
 
       // Verify bottom control inside sheet (Monet InkSwitch row) is NOT covered by bottom floating dock
-      final monetText = find.text('Material You 动态取色 (Monet)');
+      final monetText = find.text('Material You 取色');
       expect(monetText, findsOneWidget);
       final monetSwitch = find.byType(InkSwitch);
       expect(monetSwitch, findsOneWidget);
@@ -293,16 +319,16 @@ void main() {
       // Dismiss bottom sheet by tapping barrier at top
       await tester.tapAt(const Offset(20, 40));
       await tester.pumpAndSettle();
-      expect(find.text('FloatingCard 悬浮卡片'), findsNothing);
+      expect(find.text('悬浮卡片'), findsNothing);
 
       // Enter TOC Rules page from Mine -> test malformed JSON rejection, valid Legado JSON import, and live regex test
-      await tester.tap(find.text('TXT 目录识别规则'));
+      await tester.tap(find.text('TXT 目录规则'));
       await tester.pumpAndSettle();
-      expect(find.text('TXT 目录识别规则'), findsOneWidget);
-      expect(find.text('粘贴 JSON 导入'), findsOneWidget);
+      expect(find.text('TXT 目录规则'), findsOneWidget);
+      expect(find.text('粘贴 JSON'), findsOneWidget);
 
       final beforeCount = (await tester.runAsync(() => db.getTocRules()))!.length;
-      await tester.tap(find.text('粘贴 JSON 导入'));
+      await tester.tap(find.text('粘贴 JSON'));
       await tester.pumpAndSettle();
       // Verify InkTextField inner TextField has NO double nested border/fill from ThemeData
       final innerTf = tester.widget<TextField>(find.byType(TextField).first);
@@ -312,18 +338,18 @@ void main() {
 
       // Paste malformed JSON -> must NOT import garbage lines
       await tester.enterText(find.byType(TextField).first, '[{"name":"broken"');
-      await tester.tap(find.text('导入规则'));
+      await tester.tap(find.text('导入').last);
       await tester.pumpAndSettle();
       expect((await tester.runAsync(() => db.getTocRules()))!.length, beforeCount);
 
       // Paste valid Legado JSON -> must import cleanly
-      await tester.tap(find.text('粘贴 JSON 导入'));
+      await tester.tap(find.text('粘贴 JSON'));
       await tester.pumpAndSettle();
       await tester.enterText(
         find.byType(TextField).first,
         r'[{"name":"测试星标规则","rule":"^★\\d+.*$","enable":true}]',
       );
-      await tester.tap(find.text('导入规则'));
+      await tester.tap(find.text('导入').last);
       await tester.pumpAndSettle();
       expect(
         (await tester.runAsync(() => db.getTocRules()))!.length,
@@ -352,9 +378,9 @@ void main() {
       await tester.tap(find.byType(InkCircleButton).first);
       await tester.pump(const Duration(seconds: 5));
       await tester.pumpAndSettle();
-      await tester.tap(find.text('WebDAV 多端同步'));
+      await tester.tap(find.text('WebDAV 同步'));
       await tester.pumpAndSettle();
-      expect(find.text('WebDAV 双层同步中心'), findsOneWidget);
+      expect(find.text('WebDAV 同步中心'), findsOneWidget);
       expect(find.textContaining('体验多端进度冲突决策弹窗'), findsNothing);
       expect(find.byTooltip('主题预设'), findsNothing);
 

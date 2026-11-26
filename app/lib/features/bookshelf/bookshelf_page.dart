@@ -5,6 +5,8 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/icons/ink_icons.dart';
+import '../../core/l10n/l10n_helpers.dart';
+import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/inkbox_theme.dart';
 import '../../core/widgets/floating_surface.dart';
 import '../../core/widgets/ink_controls.dart';
@@ -22,7 +24,7 @@ class BookshelfPage extends ConsumerStatefulWidget {
 }
 
 class _BookshelfPageState extends ConsumerState<BookshelfPage> {
-  String _selectedGroup = '所有';
+  ShelfFilterGroup _selectedGroup = ShelfFilterGroup.all;
   bool _isGrid = true;
   bool _showSearch = false;
   String _query = '';
@@ -30,25 +32,24 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   final Set<int> _selectedIds = {};
 
   static const _coverPalettes = [
-    [Color(0xFF1E3246), Color(0xFF3B5978)],
-    [Color(0xFF8C4A32), Color(0xFFB86B4B)],
-    [Color(0xFF2D5A4C), Color(0xFF4A7C6A)],
-    [Color(0xFF6B4E71), Color(0xFF916D98)],
-    [Color(0xFF7A5C38), Color(0xFFA68255)],
-    [Color(0xFF3D4B5C), Color(0xFF5E728A)],
+    [Color(0xFF1D3557), Color(0xFF3B608C)],
+    [Color(0xFF264653), Color(0xFF437689)],
+    [Color(0xFF3D3456), Color(0xFF64588A)],
+    [Color(0xFF7D3838), Color(0xFFA85252)],
+    [Color(0xFF2D4F44), Color(0xFF487A69)],
+    [Color(0xFF36414E), Color(0xFF59697D)],
   ];
 
   List<Color> _paletteFor(Book book) {
     return _coverPalettes[book.title.hashCode.abs() % _coverPalettes.length];
   }
 
-  bool _isFinished(Book b) =>
-      b.progressRatio >= 0.99 || b.shelfGroup == '已读完';
-
-  bool _matchesGroup(Book b, String group) {
-    if (group == '所有') return true;
-    if (group == '已读完') return _isFinished(b);
-    return !_isFinished(b);
+  bool _matchesGroup(Book b, ShelfFilterGroup group) {
+    return switch (group) {
+      ShelfFilterGroup.all => true,
+      ShelfFilterGroup.finished => isBookFinished(b),
+      ShelfFilterGroup.reading => !isBookFinished(b),
+    };
   }
 
   List<Book> _sortBooks(List<Book> input) {
@@ -76,31 +77,16 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   }
 
   Future<void> _showSortSheet() async {
+    final l10n = context.l10n;
     final picked = await showInkOptionSheet<_BookSortMode>(
       context: context,
-      title: '排序方式',
+      title: l10n.sortBy,
       selectedValue: _sortMode,
-      options: const [
-        InkOptionItem(
-          value: _BookSortMode.lastRead,
-          label: '按最近阅读',
-          subtitle: '优先展示刚刚读过的书籍',
-        ),
-        InkOptionItem(
-          value: _BookSortMode.addedAt,
-          label: '按添加时间',
-          subtitle: '最新导入的书籍排在前面',
-        ),
-        InkOptionItem(
-          value: _BookSortMode.title,
-          label: '按书名排序',
-          subtitle: '按书名首字符顺序排列',
-        ),
-        InkOptionItem(
-          value: _BookSortMode.progress,
-          label: '按阅读进度',
-          subtitle: '进度更高的书籍优先显示',
-        ),
+      options: [
+        InkOptionItem(value: _BookSortMode.lastRead, label: l10n.sortLastRead),
+        InkOptionItem(value: _BookSortMode.addedAt, label: l10n.sortAddedAt),
+        InkOptionItem(value: _BookSortMode.title, label: l10n.sortTitle),
+        InkOptionItem(value: _BookSortMode.progress, label: l10n.sortProgress),
       ],
     );
     if (picked != null && mounted) {
@@ -126,34 +112,31 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     if (!mounted) return;
     setState(() => _selectedIds.clear());
     final updatedShelves = await db.getShelves('book');
-    final targetName = updatedShelves
-            .where((s) => s.id == targetShelfId)
-            .firstOrNull
-            ?.name ??
-        '目标书架';
+    final targetShelf =
+        updatedShelves.where((s) => s.id == targetShelfId).firstOrNull;
     if (!mounted) return;
+    final l10n = context.l10n;
+    final targetName = localizedShelfName(l10n, targetShelf, isComic: false);
     ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('已将 $count 本书移至「$targetName」')),
+      SnackBar(content: Text(l10n.moveBookSuccess(count, targetName))),
     );
   }
 
   Future<void> _batchRemoveBooks() async {
+    final l10n = context.l10n;
     final count = _selectedIds.length;
     final choice = await showInkOptionSheet<String>(
       context: context,
-      title: '移除选中的 $count 本书籍',
-      subtitle: '移出书架会保留在「导入历史」中，随时可一键重新入架',
-      options: const [
+      title: l10n.removeBooksTitle(count),
+      options: [
         InkOptionItem(
           value: 'archive',
-          label: '移出书架（保留在导入历史）',
-          subtitle: '保留阅读进度与本地文件，可在「导入 -> 导入历史」快速恢复',
+          label: l10n.removeArchiveOption,
           icon: InkIcon.history,
         ),
         InkOptionItem(
           value: 'permanent',
-          label: '彻底删除',
-          subtitle: '同时清除导入历史、书签笔记与应用内文件副本，无法恢复',
+          label: l10n.removePermanentOption,
           icon: InkIcon.trash,
           danger: true,
         ),
@@ -164,14 +147,16 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       await ref.read(appDatabaseProvider).archiveBooksByIds(_selectedIds);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已移出 $count 本书（可在「导入历史」中恢复）')),
+          SnackBar(content: Text(context.l10n.archivedBooksToast(count))),
         );
       }
     } else if (choice == 'permanent') {
-      await ref.read(importServiceProvider).permanentlyDeleteBooks(_selectedIds);
+      await ref
+          .read(importServiceProvider)
+          .permanentlyDeleteBooks(_selectedIds);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('已彻底删除 $count 本书')),
+          SnackBar(content: Text(context.l10n.deletedBooksToast(count))),
         );
       }
     }
@@ -181,6 +166,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
+    final l10n = context.l10n;
     final booksAsync = ref.watch(booksStreamProvider);
     final shelves =
         ref.watch(bookShelvesStreamProvider).valueOrNull ?? const <Shelf>[];
@@ -188,9 +174,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     final activeShelfId =
         AppDatabase.resolveEffectiveShelfId(rawActiveShelfId, shelves);
     final activeShelf = shelves.where((s) => s.id == activeShelfId).firstOrNull;
-    final headerTitle = activeShelf?.name ?? kDefaultBookShelfName;
+    final headerTitle = localizedShelfName(l10n, activeShelf, isComic: false);
     final selecting = _selectedIds.isNotEmpty;
     final navBottomInset = MediaQuery.paddingOf(context).bottom;
+    final wide = isWideLayout(context);
 
     return SafeArea(
       bottom: false,
@@ -199,7 +186,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           Column(
             children: [
               FloatingHeaderBar(
-                title: selecting ? '已选 ${_selectedIds.length} 本' : headerTitle,
+                title: selecting
+                    ? l10n.selectedCountBooks(_selectedIds.length)
+                    : headerTitle,
                 titleTrailing: selecting
                     ? null
                     : Container(
@@ -216,7 +205,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                           children: [
                             if (shelves.length > 1) ...[
                               Text(
-                                '${shelves.length}架',
+                                l10n.shelvesCountBadge(shelves.length),
                                 style: TextStyle(
                                   fontSize: 10.5,
                                   fontWeight: FontWeight.w700,
@@ -244,7 +233,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                         TextButton(
                           onPressed: () => setState(() => _selectedIds.clear()),
                           child: Text(
-                            '取消',
+                            l10n.cancel,
                             style: TextStyle(color: tokens.accentPrimary),
                           ),
                         ),
@@ -257,7 +246,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                             color: tokens.inkPrimary,
                           ),
                           highlighted: _showSearch,
-                          tooltip: '搜索书籍',
+                          tooltip: l10n.searchBooks,
                           onPressed: () => setState(() {
                             _showSearch = !_showSearch;
                             if (!_showSearch) _query = '';
@@ -270,7 +259,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                             size: 18,
                             color: tokens.inkPrimary,
                           ),
-                          tooltip: _isGrid ? '切换为列表视图' : '切换为网格视图',
+                          tooltip: _isGrid ? l10n.listView : l10n.gridView,
                           onPressed: () => setState(() => _isGrid = !_isGrid),
                         ),
                         const SizedBox(width: 8),
@@ -280,7 +269,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                             size: 17,
                             color: tokens.inkPrimary,
                           ),
-                          tooltip: '排序方式',
+                          tooltip: l10n.sortBy,
                           onPressed: _showSortSheet,
                         ),
                       ],
@@ -291,7 +280,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                   child: InkTextField(
                     autofocus: true,
                     prefixIcon: InkIcon.search,
-                    hintText: '搜索当前书架书名或作者...',
+                    hintText: l10n.searchBooksHint,
                     onChanged: (v) => setState(() => _query = v.trim()),
                   ),
                 ),
@@ -299,7 +288,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 child: booksAsync.when(
                   loading: () =>
                       const Center(child: CircularProgressIndicator()),
-                  error: (e, _) => Center(child: Text('书架加载失败: $e')),
+                  error: (e, _) =>
+                      Center(child: Text(l10n.bookshelfLoadError('$e'))),
                   data: (allBooks) {
                     final shelfBooks = shelves.isEmpty
                         ? allBooks
@@ -309,13 +299,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                     b.shelfId, shelves) ==
                                 activeShelfId)
                             .toList();
-                    final activeGroup =
-                        kDefaultShelfGroups.contains(_selectedGroup)
-                            ? _selectedGroup
-                            : '所有';
                     final filtered = _sortBooks(
                       shelfBooks.where((b) {
-                        final groupMatch = _matchesGroup(b, activeGroup);
+                        final groupMatch = _matchesGroup(b, _selectedGroup);
                         final qMatch = _query.isEmpty ||
                             b.title
                                 .toLowerCase()
@@ -332,8 +318,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                         : shelfBooks.reduce(
                             (a, b) => a.lastReadAtMs >= b.lastReadAtMs ? a : b,
                           );
-                    final bottomPad =
-                        tokens.isFloatingCard ? navBottomInset + 124.0 : 80.0;
+                    final bottomPad = wide
+                        ? 88.0
+                        : (tokens.isFloatingCard ? navBottomInset + 116.0 : 80.0);
 
                     return Column(
                       children: [
@@ -342,25 +329,14 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                           child: ListView.separated(
                             padding: const EdgeInsets.symmetric(horizontal: 14),
                             scrollDirection: Axis.horizontal,
-                            itemCount: kDefaultShelfGroups.length + 1,
+                            itemCount: ShelfFilterGroup.values.length,
                             separatorBuilder: (_, _) =>
                                 const SizedBox(width: 8),
                             itemBuilder: (context, idx) {
-                              if (idx == kDefaultShelfGroups.length) {
-                                return InkPillChip(
-                                  label: '切换书架',
-                                  leadingIcon: InkIcon.bookshelf,
-                                  elevated: true,
-                                  onTap: () => showShelfSwitcherSheet(
-                                    context: context,
-                                    mediaKind: 'book',
-                                  ),
-                                );
-                              }
-                              final grp = kDefaultShelfGroups[idx];
-                              final active = activeGroup == grp;
+                              final grp = ShelfFilterGroup.values[idx];
+                              final active = _selectedGroup == grp;
                               return InkPillChip(
-                                label: grp,
+                                label: grp.labelOf(l10n),
                                 selected: active,
                                 elevated: true,
                                 onTap: () =>
@@ -375,7 +351,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                               ? Center(
                                   child: Padding(
                                     padding: EdgeInsets.only(
-                                      bottom: tokens.isFloatingCard ? 64 : 16,
+                                      left: 24,
+                                      right: 24,
+                                      bottom: (!wide && tokens.isFloatingCard)
+                                          ? 64
+                                          : 16,
                                     ),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
@@ -388,10 +368,12 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                         const SizedBox(height: 10),
                                         Text(
                                           allBooks.isEmpty
-                                              ? '书架还是空的，导入你的第一本小说吧'
+                                              ? l10n.emptyLibraryBooks
                                               : (shelfBooks.isEmpty
-                                                  ? '「$headerTitle」暂无书籍，可导入或从其他书架移入'
-                                                  : '当前分组暂无书籍'),
+                                                  ? l10n.emptyShelfBooks(
+                                                      headerTitle)
+                                                  : l10n.emptyGroupBooks),
+                                          textAlign: TextAlign.center,
                                           style: TextStyle(
                                             fontSize: 13,
                                             color: tokens.inkMuted,
@@ -401,6 +383,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                           const SizedBox(height: 14),
                                           Wrap(
                                             spacing: 10,
+                                            runSpacing: 8,
+                                            alignment: WrapAlignment.center,
                                             children: [
                                               FilledButton.icon(
                                                 style: FilledButton.styleFrom(
@@ -417,7 +401,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                                       .colorScheme
                                                       .onPrimary,
                                                 ),
-                                                label: const Text('导入本地书籍'),
+                                                label:
+                                                    Text(l10n.importLocalBooks),
                                               ),
                                               if (shelves.length > 1)
                                                 OutlinedButton(
@@ -426,8 +411,9 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                                     shape:
                                                         const StadiumBorder(),
                                                     side: BorderSide(
-                                                        color: tokens
-                                                            .subtleBorder),
+                                                      color:
+                                                          tokens.subtleBorder,
+                                                    ),
                                                   ),
                                                   onPressed: () =>
                                                       showShelfSwitcherSheet(
@@ -435,10 +421,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                                     mediaKind: 'book',
                                                   ),
                                                   child: Text(
-                                                    '切换其他书架',
+                                                    l10n.switchOtherShelf,
                                                     style: TextStyle(
-                                                        color:
-                                                            tokens.inkPrimary),
+                                                      color: tokens.inkPrimary,
+                                                    ),
                                                   ),
                                                 ),
                                             ],
@@ -452,7 +438,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                   slivers: [
                                     if (latest != null &&
                                         !selecting &&
-                                        activeGroup == '所有' &&
+                                        _selectedGroup ==
+                                            ShelfFilterGroup.all &&
                                         _query.isEmpty)
                                       SliverPadding(
                                         padding: const EdgeInsets.fromLTRB(
@@ -474,10 +461,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                             14, 0, 14, bottomPad),
                                         sliver: SliverGrid(
                                           gridDelegate:
-                                              const SliverGridDelegateWithFixedCrossAxisCount(
-                                            crossAxisCount: 3,
-                                            mainAxisSpacing: 12,
-                                            crossAxisSpacing: 12,
+                                              adaptiveShelfGridDelegate(
+                                            context,
                                             childAspectRatio: 0.62,
                                           ),
                                           delegate: SliverChildBuilderDelegate(
@@ -499,8 +484,6 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                                 },
                                                 onLongPress: () =>
                                                     _toggleSelect(book.id),
-                                                onInfoTap: () => context
-                                                    .push('/book/${book.id}'),
                                               );
                                             },
                                             childCount: filtered.length,
@@ -557,57 +540,102 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                     .where((b) => _selectedIds.contains(b.id))
                     .toList();
                 final allFinished = selectedBooks.isNotEmpty &&
-                    selectedBooks.every(_isFinished);
+                    selectedBooks.every(isBookFinished);
                 return Positioned(
                   left: 14,
                   right: 14,
-                  bottom: tokens.isFloatingCard ? navBottomInset + 92 : 14,
-                  child: FloatingCard(
-                    frosted: true,
-                    radius: 24,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 12, vertical: 10),
-                    child: Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceAround,
-                      children: [
-                        _BatchActionBtn(
-                          label: '移动书架',
-                          onTap: () => _batchMoveShelf(shelves, activeShelfId),
+                  bottom: (!wide && tokens.isFloatingCard)
+                      ? navBottomInset + 84
+                      : 14,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: wide ? 480 : double.infinity,
+                      ),
+                      child: FloatingCard(
+                        frosted: true,
+                        radius: 22,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
                         ),
-                        _BatchActionBtn(
-                          label: allFinished ? '标为在读' : '标为读完',
-                          onTap: () async {
-                            final db = ref.read(appDatabaseProvider);
-                            for (final b in selectedBooks) {
-                              if (allFinished) {
-                                final nextRatio = b.progressRatio >= 0.99
-                                    ? ((b.currentChapterIndex == 0 &&
-                                            b.currentCharOffset == 0)
-                                        ? 0.0
-                                        : 0.98)
-                                    : null;
-                                await db.updateBookMeta(
-                                  b.id,
-                                  shelfGroup: '在读',
-                                  progressRatio: nextRatio,
-                                );
-                              } else {
-                                await db.updateBookMeta(
-                                  b.id,
-                                  shelfGroup: '已读完',
-                                  progressRatio: 1.0,
-                                );
-                              }
-                            }
-                            if (mounted) setState(() => _selectedIds.clear());
-                          },
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                          children: [
+                            if (_selectedIds.length == 1)
+                              Flexible(
+                                child: FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: _BatchActionBtn(
+                                    label: l10n.details,
+                                    onTap: () {
+                                      final id = _selectedIds.first;
+                                      setState(() => _selectedIds.clear());
+                                      context.push('/book/$id');
+                                    },
+                                  ),
+                                ),
+                              ),
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: _BatchActionBtn(
+                                  label: l10n.moveShelf,
+                                  onTap: () =>
+                                      _batchMoveShelf(shelves, activeShelfId),
+                                ),
+                              ),
+                            ),
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: _BatchActionBtn(
+                                  label: allFinished
+                                      ? l10n.markReading
+                                      : l10n.markFinished,
+                                  onTap: () async {
+                                    final db = ref.read(appDatabaseProvider);
+                                    for (final b in selectedBooks) {
+                                      if (allFinished) {
+                                        final nextRatio = b.progressRatio >= 0.99
+                                            ? ((b.currentChapterIndex == 0 &&
+                                                    b.currentCharOffset == 0)
+                                                ? 0.0
+                                                : 0.98)
+                                            : null;
+                                        await db.updateBookMeta(
+                                          b.id,
+                                          shelfGroup: '在读',
+                                          progressRatio: nextRatio,
+                                        );
+                                      } else {
+                                        await db.updateBookMeta(
+                                          b.id,
+                                          shelfGroup: '已读完',
+                                          progressRatio: 1.0,
+                                        );
+                                      }
+                                    }
+                                    if (mounted) {
+                                      setState(() => _selectedIds.clear());
+                                    }
+                                  },
+                                ),
+                              ),
+                            ),
+                            Flexible(
+                              child: FittedBox(
+                                fit: BoxFit.scaleDown,
+                                child: _BatchActionBtn(
+                                  label: l10n.removeBooks,
+                                  danger: true,
+                                  onTap: _batchRemoveBooks,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        _BatchActionBtn(
-                          label: '移除书籍',
-                          danger: true,
-                          onTap: _batchRemoveBooks,
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 );
@@ -616,13 +644,15 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           else
             Positioned(
               right: 18,
-              bottom: tokens.isFloatingCard ? navBottomInset + 92 : 18,
+              bottom: (!wide && tokens.isFloatingCard)
+                  ? navBottomInset + 84
+                  : 18,
               child: FloatingActionButton.small(
                 heroTag: 'bookshelf_import_fab',
                 backgroundColor: tokens.accentPrimary,
                 foregroundColor: Theme.of(context).colorScheme.onPrimary,
                 shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(16),
+                  borderRadius: BorderRadius.circular(14),
                 ),
                 onPressed: () => context.go('/import'),
                 child: InkIconWidget(
@@ -653,9 +683,16 @@ class _BatchActionBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
     return TextButton(
+      style: TextButton.styleFrom(
+        minimumSize: Size.zero,
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+        tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+      ),
       onPressed: onTap,
       child: Text(
         label,
+        maxLines: 1,
+        overflow: TextOverflow.ellipsis,
         style: TextStyle(
           fontSize: 12.5,
           fontWeight: FontWeight.w700,
@@ -679,6 +716,7 @@ class _BookCoverArt extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final hasCover =
         book.coverPath != null && File(book.coverPath!).existsSync();
     return ClipRRect(
@@ -716,7 +754,7 @@ class _BookCoverArt extends StatelessWidget {
                   if (!compact) ...[
                     const SizedBox(height: 2),
                     Text(
-                      book.author,
+                      localizedAuthor(l10n, book.author),
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: const TextStyle(
@@ -728,25 +766,6 @@ class _BookCoverArt extends StatelessWidget {
                 ],
               ),
             ),
-          Positioned(
-            top: compact ? 4 : 6,
-            right: compact ? 4 : 6,
-            child: Container(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1.5),
-              decoration: BoxDecoration(
-                color: Colors.black45,
-                borderRadius: BorderRadius.circular(5),
-              ),
-              child: Text(
-                book.format,
-                style: TextStyle(
-                  fontSize: compact ? 7.5 : 8.5,
-                  fontWeight: FontWeight.w700,
-                  color: Colors.white,
-                ),
-              ),
-            ),
-          ),
         ],
       ),
     );
@@ -769,7 +788,9 @@ class _ContinueReadingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
+    final l10n = context.l10n;
     final pct = (book.progressRatio * 100).round();
+    final chTitle = localizedChapterTitle(l10n, book.currentChapterTitle);
     return FloatingCard(
       onTap: onTap,
       onLongPress: onInfo,
@@ -777,8 +798,8 @@ class _ContinueReadingCard extends StatelessWidget {
       child: Row(
         children: [
           SizedBox(
-            width: 50,
-            height: 68,
+            width: 48,
+            height: 64,
             child: _BookCoverArt(book: book, palette: palette, compact: true),
           ),
           const SizedBox(width: 12),
@@ -788,14 +809,16 @@ class _ContinueReadingCard extends StatelessWidget {
               children: [
                 Row(
                   children: [
-                    InkIconWidget(
-                      InkIcon.syncCloud,
-                      size: 13,
-                      color: tokens.accentPrimary,
-                    ),
-                    const SizedBox(width: 4),
+                    if (book.cloudFileSynced) ...[
+                      InkIconWidget(
+                        InkIcon.syncCloud,
+                        size: 12,
+                        color: tokens.accentPrimary,
+                      ),
+                      const SizedBox(width: 4),
+                    ],
                     Text(
-                      book.cloudFileSynced ? '继续阅读 · 云端已同步' : '继续阅读',
+                      l10n.continueReading,
                       style: TextStyle(
                         fontSize: 11,
                         fontWeight: FontWeight.w600,
@@ -817,7 +840,7 @@ class _ContinueReadingCard extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${book.currentChapterTitle} · $pct%',
+                  '$chTitle · $pct%',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 11.5, color: tokens.inkMuted),
@@ -827,7 +850,7 @@ class _ContinueReadingCard extends StatelessWidget {
                   borderRadius: BorderRadius.circular(999),
                   child: LinearProgressIndicator(
                     value: book.progressRatio.clamp(0.0, 1.0),
-                    minHeight: 4,
+                    minHeight: 3.5,
                     backgroundColor: tokens.surfaceVariant,
                     valueColor: AlwaysStoppedAnimation(tokens.accentPrimary),
                   ),
@@ -837,8 +860,8 @@ class _ContinueReadingCard extends StatelessWidget {
           ),
           const SizedBox(width: 10),
           Container(
-            width: 38,
-            height: 38,
+            width: 36,
+            height: 36,
             decoration: BoxDecoration(
               color: tokens.accentSoft,
               shape: BoxShape.circle,
@@ -846,7 +869,7 @@ class _ContinueReadingCard extends StatelessWidget {
             child: Center(
               child: InkIconWidget(
                 InkIcon.play,
-                size: 17,
+                size: 16,
                 color: tokens.accentPrimary,
               ),
             ),
@@ -864,7 +887,6 @@ class _BookGridItem extends StatelessWidget {
     required this.selected,
     required this.onTap,
     required this.onLongPress,
-    required this.onInfoTap,
   });
 
   final Book book;
@@ -872,7 +894,6 @@ class _BookGridItem extends StatelessWidget {
   final bool selected;
   final VoidCallback onTap;
   final VoidCallback onLongPress;
-  final VoidCallback onInfoTap;
 
   @override
   Widget build(BuildContext context) {
@@ -909,39 +930,22 @@ class _BookGridItem extends StatelessWidget {
         onTap: onTap,
         onLongPress: onLongPress,
         borderColor: selected ? tokens.accentPrimary : null,
-        radius: 14,
-        padding: const EdgeInsets.all(6.5),
+        radius: 13,
+        padding: const EdgeInsets.all(6),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Expanded(child: cover),
             const SizedBox(height: 5),
-            Row(
-              children: [
-                Expanded(
-                  child: Text(
-                    book.title,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: tokens.inkPrimary,
-                    ),
-                  ),
-                ),
-                GestureDetector(
-                  onTap: onInfoTap,
-                  child: Padding(
-                    padding: const EdgeInsets.only(left: 2),
-                    child: InkIconWidget(
-                      InkIcon.more,
-                      size: 14,
-                      color: tokens.inkMuted,
-                    ),
-                  ),
-                ),
-              ],
+            Text(
+              book.title,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: tokens.inkPrimary,
+              ),
             ),
             const SizedBox(height: 3),
             Row(
@@ -983,31 +987,24 @@ class _BookGridItem extends StatelessWidget {
         children: [
           Expanded(child: cover),
           const SizedBox(height: 5),
-          Row(
-            children: [
-              Expanded(
-                child: Text(
-                  book.title,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: TextStyle(
-                    fontSize: 12,
-                    fontWeight: FontWeight.w600,
-                    color: tokens.inkPrimary,
-                  ),
-                ),
-              ),
-              GestureDetector(
-                onTap: onInfoTap,
-                child: InkIconWidget(
-                  InkIcon.more,
-                  size: 14,
-                  color: tokens.inkMuted,
-                ),
-              ),
-            ],
+          Text(
+            book.title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: tokens.inkPrimary,
+            ),
           ),
-          Text('$pct%', style: TextStyle(fontSize: 10, color: tokens.inkMuted)),
+          Text(
+            '$pct%',
+            style: TextStyle(
+              fontSize: 10,
+              color: tokens.inkMuted,
+              fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+          ),
         ],
       ),
     );
@@ -1034,7 +1031,10 @@ class _BookListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
+    final l10n = context.l10n;
     final pct = (book.progressRatio * 100).round();
+    final author = localizedAuthor(l10n, book.author);
+    final chapter = localizedChapterTitle(l10n, book.currentChapterTitle);
     return FloatingCard(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -1064,7 +1064,7 @@ class _BookListItem extends StatelessWidget {
                 ),
                 const SizedBox(height: 2),
                 Text(
-                  '${book.author} · ${book.currentChapterTitle}',
+                  '$author · $chapter',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: TextStyle(fontSize: 11.5, color: tokens.inkMuted),
@@ -1087,7 +1087,11 @@ class _BookListItem extends StatelessWidget {
                     const SizedBox(width: 8),
                     Text(
                       '$pct%',
-                      style: TextStyle(fontSize: 11, color: tokens.inkMuted),
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: tokens.inkMuted,
+                        fontFeatures: const [FontFeature.tabularFigures()],
+                      ),
                     ),
                   ],
                 ),
@@ -1095,8 +1099,13 @@ class _BookListItem extends StatelessWidget {
             ),
           ),
           IconButton(
+            tooltip: l10n.details,
             onPressed: onInfoTap,
-            icon: InkIconWidget(InkIcon.more, size: 17, color: tokens.inkMuted),
+            icon: InkIconWidget(
+              InkIcon.more,
+              size: 17,
+              color: tokens.inkMuted,
+            ),
           ),
         ],
       ),

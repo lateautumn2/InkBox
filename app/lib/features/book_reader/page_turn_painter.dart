@@ -46,6 +46,7 @@ class PageTurnStage extends StatefulWidget {
     this.onBoundaryReached,
     this.onInterceptTap,
     this.selectionActive = false,
+    this.isDualSpread = false,
   });
 
   final PageTurnMode mode;
@@ -62,6 +63,7 @@ class PageTurnStage extends StatefulWidget {
   final void Function(double nx, double ny) onTapNormalized;
   final bool Function(Offset globalPosition)? onInterceptTap;
   final bool selectionActive;
+  final bool isDualSpread;
 
   bool get effectiveCanTurnNext => canTurnNext ?? (nextPage != null);
   bool get effectiveCanTurnPrev => canTurnPrev ?? (previousPage != null);
@@ -418,6 +420,10 @@ class _PageTurnStageState extends State<PageTurnStage>
           ];
         }
 
+        if (widget.isDualSpread && widget.mode == PageTurnMode.simulation) {
+          return _buildDualSpreadSimulation(size, turningNext, absP);
+        }
+
         final underPage = turningNext
             ? (widget.nextPage ?? _fallbackPaper())
             : widget.currentPage;
@@ -451,6 +457,146 @@ class _PageTurnStageState extends State<PageTurnStage>
         ];
     }
   }
+
+  List<Widget> _buildDualSpreadSimulation(
+    Size size,
+    bool turningNext,
+    double absP,
+  ) {
+    final incoming = turningNext
+        ? (widget.nextPage ?? _fallbackPaper())
+        : (widget.previousPage ?? _fallbackPaper());
+    final firstHalfOfDrag = absP < 0.5;
+
+    if (turningNext) {
+      if (firstHalfOfDrag) {
+        final foldX = size.width * (1.0 - absP);
+        final geom = _CurlGeometry.compute(
+          size: size,
+          foldX: foldX,
+          pivotY: _touchY,
+        );
+        return [
+          incoming,
+          ClipPath(
+            clipper: _PageCurlClipper(geom: geom),
+            child: widget.currentPage,
+          ),
+          IgnorePointer(
+            child: CustomPaint(
+              size: size,
+              painter: _PageCurlPainter(
+                geom: geom,
+                paperColor: widget.paperColor,
+              ),
+            ),
+          ),
+        ];
+      }
+
+      final revealX = (size.width * 0.5) * (1.0 - (absP - 0.5) * 2.0);
+      final spineShade = ((1.0 - (absP - 0.5) * 2.0) * 0.16).clamp(0.0, 0.2);
+      return [
+        widget.currentPage,
+        ClipRect(
+          clipper: _HorizontalRectClipper(left: revealX, right: size.width),
+          child: incoming,
+        ),
+        if (revealX > 1)
+          Positioned(
+            left: (revealX - 18).clamp(0.0, size.width),
+            top: 0,
+            bottom: 0,
+            width: 18,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: spineShade),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ];
+    }
+
+    if (firstHalfOfDrag) {
+      final revealX = size.width * absP;
+      final spineShade = (absP * 2.0 * 0.16).clamp(0.0, 0.2);
+      return [
+        incoming,
+        ClipRect(
+          clipper: _HorizontalRectClipper(left: revealX, right: size.width),
+          child: widget.currentPage,
+        ),
+        if (revealX > 1)
+          Positioned(
+            left: (revealX - 18).clamp(0.0, size.width),
+            top: 0,
+            bottom: 0,
+            width: 18,
+            child: IgnorePointer(
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.transparent,
+                      Colors.black.withValues(alpha: spineShade),
+                    ],
+                  ),
+                ),
+              ),
+            ),
+          ),
+      ];
+    }
+
+    final foldX = size.width * absP;
+    final geom = _CurlGeometry.compute(
+      size: size,
+      foldX: foldX,
+      pivotY: _touchY,
+    );
+    return [
+      widget.currentPage,
+      ClipPath(
+        clipper: _PageCurlClipper(geom: geom),
+        child: incoming,
+      ),
+      IgnorePointer(
+        child: CustomPaint(
+          size: size,
+          painter: _PageCurlPainter(
+            geom: geom,
+            paperColor: widget.paperColor,
+          ),
+        ),
+      ),
+    ];
+  }
+}
+
+class _HorizontalRectClipper extends CustomClipper<Rect> {
+  const _HorizontalRectClipper({required this.left, required this.right});
+
+  final double left;
+  final double right;
+
+  @override
+  Rect getClip(Size size) => Rect.fromLTRB(
+        left.clamp(0.0, size.width),
+        0,
+        right.clamp(0.0, size.width),
+        size.height,
+      );
+
+  @override
+  bool shouldReclip(_HorizontalRectClipper old) =>
+      old.left != left || old.right != right;
 }
 
 class _CurlGeometry {

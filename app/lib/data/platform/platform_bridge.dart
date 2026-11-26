@@ -42,7 +42,21 @@ class TtsEngineOption {
   final String label;
 }
 
-/// Thin 5-capability platform abstraction isolating OS-specific features so
+class TtsVoiceOption {
+  const TtsVoiceOption({
+    required this.name,
+    required this.locale,
+    this.quality = 400,
+    this.requiresNetwork = false,
+  });
+
+  final String name;
+  final String locale;
+  final int quality;
+  final bool requiresNetwork;
+}
+
+/// Thin platform abstraction isolating OS-specific features so
 /// Android, iOS, Windows, HarmonyOS NEXT, and macOS only implement this contract.
 abstract class PlatformBridge {
   Stream<PlatformEvent> get events;
@@ -61,12 +75,35 @@ abstract class PlatformBridge {
     double pitch = 1.0,
     String? language,
     String? engine,
+    String? voiceName,
   });
   Future<void> stopTts();
   Future<List<TtsEngineOption>> getTtsEngines() async => const [];
+  Future<List<TtsVoiceOption>> getTtsVoices({
+    String? engine,
+    String? language,
+  }) async =>
+      const [];
   Future<void> openSystemTtsSettings() async {}
+  Future<bool> playAudioFile(
+    String path, {
+    double speed = 1.0,
+    String? playbackId,
+  }) async =>
+      false;
+  Future<void> pauseAudio() async {}
+  Future<void> resumeAudio() async {}
+  Future<void> stopAudio() async {}
+  Future<void> setAudioSpeed(double speed) async {}
+  Future<void> saveSecret(String key, String value) async {}
+  Future<String?> readSecret(String key) async => null;
+  Future<void> deleteSecret(String key) async {}
   Future<int> getPdfPageCount(String path);
-  Future<Uint8List?> renderPdfPage(String path, int pageIndex, {double scale = 2.0});
+  Future<Uint8List?> renderPdfPage(
+    String path,
+    int pageIndex, {
+    double scale = 2.0,
+  });
 }
 
 class MethodChannelPlatformBridge implements PlatformBridge {
@@ -122,7 +159,7 @@ class MethodChannelPlatformBridge implements PlatformBridge {
       if (raw == null || raw['uri'] == null) return null;
       return PickedDirectory(
         uri: raw['uri'] as String,
-        name: raw['name'] as String? ?? '本地目录',
+        name: raw['name'] as String? ?? 'Local',
       );
     } on MissingPluginException {
       return null;
@@ -167,9 +204,7 @@ class MethodChannelPlatformBridge implements PlatformBridge {
   Future<void> setKeepScreenOn(bool enabled) async {
     try {
       await _channel.invokeMethod<void>('setKeepScreenOn', {'enabled': enabled});
-    } on MissingPluginException {
-      // No-op in headless tests
-    }
+    } on MissingPluginException {}
   }
 
   @override
@@ -177,9 +212,7 @@ class MethodChannelPlatformBridge implements PlatformBridge {
     try {
       await _channel
           .invokeMethod<void>('setVolumeKeyPaging', {'enabled': enabled});
-    } on MissingPluginException {
-      // No-op in headless tests
-    }
+    } on MissingPluginException {}
   }
 
   @override
@@ -189,9 +222,7 @@ class MethodChannelPlatformBridge implements PlatformBridge {
         'setScreenBrightness',
         {'brightness': brightness},
       );
-    } on MissingPluginException {
-      // No-op
-    }
+    } on MissingPluginException {}
   }
 
   @override
@@ -201,6 +232,7 @@ class MethodChannelPlatformBridge implements PlatformBridge {
     double pitch = 1.0,
     String? language,
     String? engine,
+    String? voiceName,
   }) async {
     try {
       return await _channel.invokeMethod<String>('speakText', {
@@ -209,9 +241,12 @@ class MethodChannelPlatformBridge implements PlatformBridge {
         'pitch': pitch,
         'language': language,
         'engine': engine,
+        'voiceName': voiceName,
       });
     } on MissingPluginException {
       return null;
+    } on PlatformException {
+      rethrow;
     }
   }
 
@@ -219,9 +254,7 @@ class MethodChannelPlatformBridge implements PlatformBridge {
   Future<void> stopTts() async {
     try {
       await _channel.invokeMethod<void>('stopTts');
-    } on MissingPluginException {
-      // No-op
-    }
+    } on MissingPluginException {}
   }
 
   @override
@@ -229,13 +262,44 @@ class MethodChannelPlatformBridge implements PlatformBridge {
     try {
       final raw = await _channel.invokeListMethod<dynamic>('getTtsEngines');
       if (raw == null) return const [];
-      return raw.map((e) {
-        final m = Map<String, dynamic>.from(e as Map);
-        return TtsEngineOption(
-          name: m['name'] as String? ?? '',
-          label: m['label'] as String? ?? (m['name'] as String? ?? 'TTS 引擎'),
-        );
-      }).where((e) => e.name.isNotEmpty).toList();
+      return raw
+          .map((e) {
+            final m = Map<String, dynamic>.from(e as Map);
+            return TtsEngineOption(
+              name: m['name'] as String? ?? '',
+              label: m['label'] as String? ?? (m['name'] as String? ?? 'TTS'),
+            );
+          })
+          .where((e) => e.name.isNotEmpty)
+          .toList();
+    } on MissingPluginException {
+      return const [];
+    }
+  }
+
+  @override
+  Future<List<TtsVoiceOption>> getTtsVoices({
+    String? engine,
+    String? language,
+  }) async {
+    try {
+      final raw = await _channel.invokeListMethod<dynamic>('getTtsVoices', {
+        'engine': engine,
+        'language': language,
+      });
+      if (raw == null) return const [];
+      return raw
+          .map((e) {
+            final m = Map<String, dynamic>.from(e as Map);
+            return TtsVoiceOption(
+              name: m['name'] as String? ?? '',
+              locale: m['locale'] as String? ?? '',
+              quality: (m['quality'] as num?)?.toInt() ?? 400,
+              requiresNetwork: m['requiresNetwork'] as bool? ?? false,
+            );
+          })
+          .where((v) => v.name.isNotEmpty)
+          .toList();
     } on MissingPluginException {
       return const [];
     }
@@ -245,9 +309,79 @@ class MethodChannelPlatformBridge implements PlatformBridge {
   Future<void> openSystemTtsSettings() async {
     try {
       await _channel.invokeMethod<void>('openSystemTtsSettings');
+    } on MissingPluginException {}
+  }
+
+  @override
+  Future<bool> playAudioFile(
+    String path, {
+    double speed = 1.0,
+    String? playbackId,
+  }) async {
+    try {
+      final ok = await _channel.invokeMethod<bool>('playAudioFile', {
+        'path': path,
+        'speed': speed,
+        'playbackId': playbackId,
+      });
+      return ok ?? false;
     } on MissingPluginException {
-      // No-op
+      return false;
     }
+  }
+
+  @override
+  Future<void> pauseAudio() async {
+    try {
+      await _channel.invokeMethod<void>('pauseAudio');
+    } on MissingPluginException {}
+  }
+
+  @override
+  Future<void> resumeAudio() async {
+    try {
+      await _channel.invokeMethod<void>('resumeAudio');
+    } on MissingPluginException {}
+  }
+
+  @override
+  Future<void> stopAudio() async {
+    try {
+      await _channel.invokeMethod<void>('stopAudio');
+    } on MissingPluginException {}
+  }
+
+  @override
+  Future<void> setAudioSpeed(double speed) async {
+    try {
+      await _channel.invokeMethod<void>('setAudioSpeed', {'speed': speed});
+    } on MissingPluginException {}
+  }
+
+  @override
+  Future<void> saveSecret(String key, String value) async {
+    try {
+      await _channel.invokeMethod<void>('saveSecret', {
+        'key': key,
+        'value': value,
+      });
+    } on MissingPluginException {}
+  }
+
+  @override
+  Future<String?> readSecret(String key) async {
+    try {
+      return await _channel.invokeMethod<String>('readSecret', {'key': key});
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  @override
+  Future<void> deleteSecret(String key) async {
+    try {
+      await _channel.invokeMethod<void>('deleteSecret', {'key': key});
+    } on MissingPluginException {}
   }
 
   @override

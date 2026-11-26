@@ -16,6 +16,12 @@ enum PageTurnMode {
   final String label;
 }
 
+enum BookPageLayoutMode {
+  auto,
+  single,
+  dual,
+}
+
 enum TapZoneAction {
   prevPage('上一页'),
   nextPage('下一页'),
@@ -83,20 +89,24 @@ class ReplaceRuleConfig {
 class BookReaderSettings {
   const BookReaderSettings({
     this.fontSize = 18.0,
-    this.lineHeight = 1.8,
+    this.lineHeight = 1.75,
+    this.paragraphSpacing = 12.0,
     this.horizontalPadding = 22.0,
     this.indentFirstLine = true,
-    this.paperTheme = BookPaperTheme.parchment,
+    this.paperTheme = BookPaperTheme.white,
     this.pageTurnMode = PageTurnMode.simulation,
+    this.pageLayoutMode = BookPageLayoutMode.auto,
     this.tapZonePreset = TapZonePreset.standard,
     this.customTapGrid = defaultStandardGrid,
     this.volumeKeyPaging = true,
     this.keepScreenOn = true,
+    this.edgeBrightnessGesture = true,
     this.chineseConversion = 'None', // None | ToSimplified | ToTraditional
     this.ttsRate = 1.0,
     this.ttsPitch = 1.0,
     this.ttsLanguage = 'zh-CN',
     this.ttsEngine = '',
+    this.ttsVoice = '',
     this.ttsAutoTurnPage = true,
     this.ttsSleepTimerMinutes = 0,
     this.autoScrollSpeed = 48.0,
@@ -124,19 +134,23 @@ class BookReaderSettings {
 
   final double fontSize;
   final double lineHeight;
+  final double paragraphSpacing;
   final double horizontalPadding;
   final bool indentFirstLine;
   final BookPaperTheme paperTheme;
   final PageTurnMode pageTurnMode;
+  final BookPageLayoutMode pageLayoutMode;
   final TapZonePreset tapZonePreset;
   final List<TapZoneAction> customTapGrid;
   final bool volumeKeyPaging;
   final bool keepScreenOn;
+  final bool edgeBrightnessGesture;
   final String chineseConversion;
   final double ttsRate;
   final double ttsPitch;
   final String ttsLanguage;
   final String ttsEngine;
+  final String ttsVoice;
   final bool ttsAutoTurnPage;
   final int ttsSleepTimerMinutes;
   final double autoScrollSpeed;
@@ -166,19 +180,23 @@ class BookReaderSettings {
   BookReaderSettings copyWith({
     double? fontSize,
     double? lineHeight,
+    double? paragraphSpacing,
     double? horizontalPadding,
     bool? indentFirstLine,
     BookPaperTheme? paperTheme,
     PageTurnMode? pageTurnMode,
+    BookPageLayoutMode? pageLayoutMode,
     TapZonePreset? tapZonePreset,
     List<TapZoneAction>? customTapGrid,
     bool? volumeKeyPaging,
     bool? keepScreenOn,
+    bool? edgeBrightnessGesture,
     String? chineseConversion,
     double? ttsRate,
     double? ttsPitch,
     String? ttsLanguage,
     String? ttsEngine,
+    String? ttsVoice,
     bool? ttsAutoTurnPage,
     int? ttsSleepTimerMinutes,
     double? autoScrollSpeed,
@@ -188,19 +206,24 @@ class BookReaderSettings {
     return BookReaderSettings(
       fontSize: fontSize ?? this.fontSize,
       lineHeight: lineHeight ?? this.lineHeight,
+      paragraphSpacing: paragraphSpacing ?? this.paragraphSpacing,
       horizontalPadding: horizontalPadding ?? this.horizontalPadding,
       indentFirstLine: indentFirstLine ?? this.indentFirstLine,
       paperTheme: paperTheme ?? this.paperTheme,
       pageTurnMode: pageTurnMode ?? this.pageTurnMode,
+      pageLayoutMode: pageLayoutMode ?? this.pageLayoutMode,
       tapZonePreset: tapZonePreset ?? this.tapZonePreset,
       customTapGrid: customTapGrid ?? this.customTapGrid,
       volumeKeyPaging: volumeKeyPaging ?? this.volumeKeyPaging,
       keepScreenOn: keepScreenOn ?? this.keepScreenOn,
+      edgeBrightnessGesture:
+          edgeBrightnessGesture ?? this.edgeBrightnessGesture,
       chineseConversion: chineseConversion ?? this.chineseConversion,
       ttsRate: ttsRate ?? this.ttsRate,
       ttsPitch: ttsPitch ?? this.ttsPitch,
       ttsLanguage: ttsLanguage ?? this.ttsLanguage,
       ttsEngine: ttsEngine ?? this.ttsEngine,
+      ttsVoice: ttsVoice ?? this.ttsVoice,
       ttsAutoTurnPage: ttsAutoTurnPage ?? this.ttsAutoTurnPage,
       ttsSleepTimerMinutes: ttsSleepTimerMinutes ?? this.ttsSleepTimerMinutes,
       autoScrollSpeed: autoScrollSpeed ?? this.autoScrollSpeed,
@@ -212,19 +235,23 @@ class BookReaderSettings {
   Map<String, dynamic> toJson() => {
         'fontSize': fontSize,
         'lineHeight': lineHeight,
+        'paragraphSpacing': paragraphSpacing,
         'horizontalPadding': horizontalPadding,
         'indentFirstLine': indentFirstLine,
         'paperTheme': paperTheme.index,
         'pageTurnMode': pageTurnMode.index,
+        'pageLayoutMode': pageLayoutMode.index,
         'tapZonePreset': tapZonePreset.index,
         'customTapGrid': customTapGrid.map((a) => a.index).toList(),
         'volumeKeyPaging': volumeKeyPaging,
         'keepScreenOn': keepScreenOn,
+        'edgeBrightnessGesture': edgeBrightnessGesture,
         'chineseConversion': chineseConversion,
         'ttsRate': ttsRate,
         'ttsPitch': ttsPitch,
         'ttsLanguage': ttsLanguage,
         'ttsEngine': ttsEngine,
+        'ttsVoice': ttsVoice,
         'ttsAutoTurnPage': ttsAutoTurnPage,
         'ttsSleepTimerMinutes': ttsSleepTimerMinutes,
         'autoScrollSpeed': autoScrollSpeed,
@@ -233,8 +260,9 @@ class BookReaderSettings {
       };
 
   factory BookReaderSettings.fromJson(Map<String, dynamic> json) {
-    final pIdx = (json['paperTheme'] as num?)?.toInt() ?? 1;
+    final pIdx = (json['paperTheme'] as num?)?.toInt() ?? 0;
     final mIdx = (json['pageTurnMode'] as num?)?.toInt() ?? 0;
+    final lIdx = (json['pageLayoutMode'] as num?)?.toInt() ?? 0;
     final tIdx = (json['tapZonePreset'] as num?)?.toInt() ?? 0;
     final rawGrid = (json['customTapGrid'] as List<dynamic>?)
         ?.map((i) => TapZoneAction
@@ -246,7 +274,9 @@ class BookReaderSettings {
 
     return BookReaderSettings(
       fontSize: (json['fontSize'] as num?)?.toDouble() ?? 18.0,
-      lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.8,
+      lineHeight: (json['lineHeight'] as num?)?.toDouble() ?? 1.75,
+      paragraphSpacing:
+          (json['paragraphSpacing'] as num?)?.toDouble() ?? 12.0,
       horizontalPadding:
           (json['horizontalPadding'] as num?)?.toDouble() ?? 22.0,
       indentFirstLine: json['indentFirstLine'] as bool? ?? true,
@@ -254,17 +284,21 @@ class BookReaderSettings {
           .values[pIdx.clamp(0, BookPaperTheme.values.length - 1)],
       pageTurnMode:
           PageTurnMode.values[mIdx.clamp(0, PageTurnMode.values.length - 1)],
+      pageLayoutMode: BookPageLayoutMode
+          .values[lIdx.clamp(0, BookPageLayoutMode.values.length - 1)],
       tapZonePreset: TapZonePreset
           .values[tIdx.clamp(0, TapZonePreset.values.length - 1)],
       customTapGrid:
           rawGrid != null && rawGrid.length == 9 ? rawGrid : defaultStandardGrid,
       volumeKeyPaging: json['volumeKeyPaging'] as bool? ?? true,
       keepScreenOn: json['keepScreenOn'] as bool? ?? true,
+      edgeBrightnessGesture: json['edgeBrightnessGesture'] as bool? ?? true,
       chineseConversion: json['chineseConversion'] as String? ?? 'None',
       ttsRate: (json['ttsRate'] as num?)?.toDouble() ?? 1.0,
       ttsPitch: (json['ttsPitch'] as num?)?.toDouble() ?? 1.0,
       ttsLanguage: json['ttsLanguage'] as String? ?? 'zh-CN',
       ttsEngine: json['ttsEngine'] as String? ?? '',
+      ttsVoice: json['ttsVoice'] as String? ?? '',
       ttsAutoTurnPage: json['ttsAutoTurnPage'] as bool? ?? true,
       ttsSleepTimerMinutes:
           (json['ttsSleepTimerMinutes'] as num?)?.toInt() ?? 0,

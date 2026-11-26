@@ -45,7 +45,7 @@ enum MangaTapLayout {
 enum MangaCanvasBg {
   pureBlack('纯黑', Color(0xFF0B0C0E)),
   darkGrey('深灰', Color(0xFF202227)),
-  warmPaper('暖纸', Color(0xFFF3EFE8)),
+  warmPaper('冷灰', Color(0xFFF4F5F7)),
   pureWhite('纯白', Color(0xFFFFFFFF));
 
   const MangaCanvasBg(this.label, this.color);
@@ -61,6 +61,8 @@ class MangaReaderSettings {
     this.canvasBg = MangaCanvasBg.pureBlack,
     this.autoCrop = true,
     this.splitWidePages = true,
+    this.autoDualInLandscape = true,
+    this.dualPageShift = true,
     this.warmFilter = false,
     this.grayscaleFilter = false,
     this.dimmerOpacity = 0.0,
@@ -75,6 +77,8 @@ class MangaReaderSettings {
   final MangaCanvasBg canvasBg;
   final bool autoCrop;
   final bool splitWidePages;
+  final bool autoDualInLandscape;
+  final bool dualPageShift;
   final bool warmFilter;
   final bool grayscaleFilter;
   final double dimmerOpacity; // 0.0 .. 0.65
@@ -119,6 +123,8 @@ class MangaReaderSettings {
     MangaCanvasBg? canvasBg,
     bool? autoCrop,
     bool? splitWidePages,
+    bool? autoDualInLandscape,
+    bool? dualPageShift,
     bool? warmFilter,
     bool? grayscaleFilter,
     double? dimmerOpacity,
@@ -133,6 +139,8 @@ class MangaReaderSettings {
       canvasBg: canvasBg ?? this.canvasBg,
       autoCrop: autoCrop ?? this.autoCrop,
       splitWidePages: splitWidePages ?? this.splitWidePages,
+      autoDualInLandscape: autoDualInLandscape ?? this.autoDualInLandscape,
+      dualPageShift: dualPageShift ?? this.dualPageShift,
       warmFilter: warmFilter ?? this.warmFilter,
       grayscaleFilter: grayscaleFilter ?? this.grayscaleFilter,
       dimmerOpacity: dimmerOpacity ?? this.dimmerOpacity,
@@ -150,6 +158,8 @@ class MangaReaderSettings {
         'canvasBg': canvasBg.index,
         'autoCrop': autoCrop,
         'splitWidePages': splitWidePages,
+        'autoDualInLandscape': autoDualInLandscape,
+        'dualPageShift': dualPageShift,
         'warmFilter': warmFilter,
         'grayscaleFilter': grayscaleFilter,
         'dimmerOpacity': dimmerOpacity,
@@ -172,6 +182,8 @@ class MangaReaderSettings {
           MangaCanvasBg.values[bIdx.clamp(0, MangaCanvasBg.values.length - 1)],
       autoCrop: json['autoCrop'] as bool? ?? true,
       splitWidePages: json['splitWidePages'] as bool? ?? true,
+      autoDualInLandscape: json['autoDualInLandscape'] as bool? ?? true,
+      dualPageShift: json['dualPageShift'] as bool? ?? true,
       warmFilter: json['warmFilter'] as bool? ?? false,
       grayscaleFilter: json['grayscaleFilter'] as bool? ?? false,
       dimmerOpacity: (json['dimmerOpacity'] as num?)?.toDouble() ?? 0.0,

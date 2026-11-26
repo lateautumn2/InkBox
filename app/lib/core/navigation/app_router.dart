@@ -15,6 +15,8 @@ import '../../features/settings/tts_settings_page.dart';
 import '../../features/toc_rules/toc_rules_page.dart';
 import '../../features/webdav_sync/webdav_sync_page.dart';
 import '../icons/ink_icons.dart';
+import '../l10n/l10n_helpers.dart';
+import '../layout/responsive_layout.dart';
 import '../theme/inkbox_theme.dart';
 
 final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
@@ -127,15 +129,8 @@ class _NavItemSpec {
   final InkIcon icon;
 }
 
-const _navItems = [
-  _NavItemSpec('书架', InkIcon.bookshelf),
-  _NavItemSpec('漫画', InkIcon.manga),
-  _NavItemSpec('导入', InkIcon.importTray),
-  _NavItemSpec('我的', InkIcon.user),
-];
-
-/// Root 4-tab scaffold supporting both FloatingCard Frosted Pill Dock
-/// and Classic flush MD3 bottom navigation bar.
+/// Root 4-tab scaffold that adapts between a bottom navigation dock on phones
+/// (`width < 600dp`) and a left NavigationRail on tablets/landscape.
 class AppShellScaffold extends StatelessWidget {
   const AppShellScaffold({
     super.key,
@@ -151,9 +146,36 @@ class AppShellScaffold extends StatelessWidget {
     );
   }
 
+  List<_NavItemSpec> _buildNavItems(BuildContext context) {
+    final l10n = context.l10n;
+    return [
+      _NavItemSpec(l10n.navBooks, InkIcon.bookshelf),
+      _NavItemSpec(l10n.navManga, InkIcon.manga),
+      _NavItemSpec(l10n.navImport, InkIcon.importTray),
+      _NavItemSpec(l10n.navMe, InkIcon.user),
+    ];
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
+    final items = _buildNavItems(context);
+
+    if (isWideLayout(context)) {
+      return Scaffold(
+        backgroundColor: tokens.canvasBg,
+        body: Row(
+          children: [
+            _AdaptiveSideRail(
+              items: items,
+              currentIndex: navigationShell.currentIndex,
+              onSelect: _onSelectTab,
+            ),
+            Expanded(child: navigationShell),
+          ],
+        ),
+      );
+    }
 
     if (tokens.isFloatingCard) {
       return Scaffold(
@@ -163,8 +185,9 @@ class AppShellScaffold extends StatelessWidget {
         bottomNavigationBar: SafeArea(
           top: false,
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 14),
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
             child: _FloatingBottomPillDock(
+              items: items,
               currentIndex: navigationShell.currentIndex,
               onSelect: _onSelectTab,
             ),
@@ -184,10 +207,10 @@ class AppShellScaffold extends StatelessWidget {
         child: SafeArea(
           top: false,
           child: SizedBox(
-            height: 66,
+            height: 60,
             child: Row(
-              children: List.generate(_navItems.length, (i) {
-                final item = _navItems[i];
+              children: List.generate(items.length, (i) {
+                final item = items[i];
                 final active = navigationShell.currentIndex == i;
                 return Expanded(
                   child: InkWell(
@@ -198,7 +221,7 @@ class AppShellScaffold extends StatelessWidget {
                         AnimatedContainer(
                           duration: const Duration(milliseconds: 180),
                           padding: const EdgeInsets.symmetric(
-                            horizontal: 16,
+                            horizontal: 14,
                             vertical: 4,
                           ),
                           decoration: BoxDecoration(
@@ -209,13 +232,13 @@ class AppShellScaffold extends StatelessWidget {
                           ),
                           child: InkIconWidget(
                             item.icon,
-                            size: 20,
+                            size: 19,
                             color: active
                                 ? tokens.accentPrimary
                                 : tokens.inkMuted,
                           ),
                         ),
-                        const SizedBox(height: 3),
+                        const SizedBox(height: 2),
                         Text(
                           item.label,
                           style: TextStyle(
@@ -240,12 +263,114 @@ class AppShellScaffold extends StatelessWidget {
   }
 }
 
-class _FloatingBottomPillDock extends StatelessWidget {
-  const _FloatingBottomPillDock({
+class _AdaptiveSideRail extends StatelessWidget {
+  const _AdaptiveSideRail({
+    required this.items,
     required this.currentIndex,
     required this.onSelect,
   });
 
+  final List<_NavItemSpec> items;
+  final int currentIndex;
+  final ValueChanged<int> onSelect;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = InkBoxTokens.of(context);
+    final railContent = Column(
+      mainAxisAlignment: MainAxisAlignment.center,
+      children: List.generate(items.length, (i) {
+        final item = items[i];
+        final active = i == currentIndex;
+        return Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () => onSelect(i),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 180),
+              width: 58,
+              padding: const EdgeInsets.symmetric(vertical: 9),
+              decoration: BoxDecoration(
+                color: active ? tokens.accentSoft : Colors.transparent,
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  InkIconWidget(
+                    item.icon,
+                    size: 20,
+                    color: active ? tokens.accentPrimary : tokens.inkMuted,
+                  ),
+                  const SizedBox(height: 3),
+                  Text(
+                    item.label,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: TextStyle(
+                      fontSize: 10.5,
+                      fontWeight: active ? FontWeight.w600 : FontWeight.w500,
+                      color: active ? tokens.accentPrimary : tokens.inkMuted,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      }),
+    );
+
+    if (tokens.isFloatingCard) {
+      return SafeArea(
+        right: false,
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 4, 12),
+          child: Container(
+            width: 72,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(tokens.dockRadius),
+              boxShadow: tokens.dockShadows,
+            ),
+            child: ClipRRect(
+              borderRadius: BorderRadius.circular(tokens.dockRadius),
+              child: BackdropFilter(
+                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: tokens.glassSurface,
+                    borderRadius: BorderRadius.circular(tokens.dockRadius),
+                    border: Border.all(color: tokens.subtleBorder, width: 1),
+                  ),
+                  child: railContent,
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      width: 76,
+      decoration: BoxDecoration(
+        color: tokens.cardSurface,
+        border: Border(right: BorderSide(color: tokens.subtleBorder)),
+      ),
+      child: SafeArea(right: false, child: railContent),
+    );
+  }
+}
+
+class _FloatingBottomPillDock extends StatelessWidget {
+  const _FloatingBottomPillDock({
+    required this.items,
+    required this.currentIndex,
+    required this.onSelect,
+  });
+
+  final List<_NavItemSpec> items;
   final int currentIndex;
   final ValueChanged<int> onSelect;
 
@@ -260,17 +385,18 @@ class _FloatingBottomPillDock extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(999),
         child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
           child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+            height: 58,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
             decoration: BoxDecoration(
               color: tokens.glassSurface,
               borderRadius: BorderRadius.circular(999),
               border: Border.all(color: tokens.subtleBorder, width: 1),
             ),
             child: Row(
-              children: List.generate(_navItems.length, (i) {
-                final item = _navItems[i];
+              children: List.generate(items.length, (i) {
+                final item = items[i];
                 final active = currentIndex == i;
                 return Expanded(
                   child: GestureDetector(
@@ -279,17 +405,18 @@ class _FloatingBottomPillDock extends StatelessWidget {
                     child: AnimatedContainer(
                       duration: const Duration(milliseconds: 200),
                       curve: Curves.easeOutCubic,
-                      padding: const EdgeInsets.symmetric(vertical: 6),
+                      padding: const EdgeInsets.symmetric(vertical: 4),
                       decoration: BoxDecoration(
                         color: active ? tokens.accentSoft : Colors.transparent,
                         borderRadius: BorderRadius.circular(999),
                       ),
                       child: Column(
                         mainAxisSize: MainAxisSize.min,
+                        mainAxisAlignment: MainAxisAlignment.center,
                         children: [
                           InkIconWidget(
                             item.icon,
-                            size: 20,
+                            size: 19,
                             color: active
                                 ? tokens.accentPrimary
                                 : tokens.inkMuted,

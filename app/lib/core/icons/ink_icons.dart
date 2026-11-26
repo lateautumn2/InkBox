@@ -41,6 +41,13 @@ enum InkIcon {
   bookmarkFilled,
   highlight,
   close,
+  language,
+  pause,
+  skipPrev,
+  skipNext,
+  dualPage,
+  brightness,
+  info,
 }
 
 /// Renders a bespoke hand-drawn monochrome ink line-art SVG icon that
@@ -222,6 +229,27 @@ class InkIconWidget extends StatelessWidget {
         '<path d="M4.2 20h15.6"/>',
     InkIcon.close:
         '<path d="M6.8 6.8l10.4 10.4M17.2 6.8L6.8 17.2"/>',
+    InkIcon.language:
+        '<circle cx="12" cy="12" r="7.5"/>'
+        '<path d="M4.8 12h14.4M12 4.5c2.4 2.1 3.7 4.7 3.7 7.5s-1.3 5.4-3.7 7.5c-2.4-2.1-3.7-4.7-3.7-7.5s1.3-5.4 3.7-7.5Z"/>',
+    InkIcon.pause:
+        '<path d="M9.2 6.6v10.8M14.8 6.6v10.8"/>',
+    InkIcon.skipPrev:
+        '<path d="M7.2 6.8v10.4"/>'
+        '<path d="M16.8 6.8c-2.7 1.7-5.3 3.4-7.9 5.2 2.6 1.8 5.2 3.5 7.9 5.2V6.8Z"/>',
+    InkIcon.skipNext:
+        '<path d="M16.8 6.8v10.4"/>'
+        '<path d="M7.2 6.8c2.7 1.7 5.3 3.4 7.9 5.2-2.6 1.8-5.2 3.5-7.9 5.2V6.8Z"/>',
+    InkIcon.dualPage:
+        '<path d="M4.2 5.6c2.6-.2 5.2-.1 7.8.6v12.2c-2.6-.7-5.2-.8-7.8-.6V5.6Z"/>'
+        '<path d="M19.8 5.6c-2.6-.2-5.2-.1-7.8.6v12.2c2.6-.7 5.2-.8 7.8-.6V5.6Z"/>',
+    InkIcon.brightness:
+        '<circle cx="12" cy="12" r="3.4"/>'
+        '<path d="M12 4.6v1.6M12 17.8v1.6M4.6 12h1.6M17.8 12h1.6"/>',
+    InkIcon.info:
+        '<circle cx="12" cy="12" r="7.6"/>'
+        '<path d="M12 11.2v4.8"/>'
+        '<circle cx="12" cy="8.1" r=".7" fill="{ink}"/>',
   };
 }
 

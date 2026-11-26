@@ -3,19 +3,22 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/icons/ink_icons.dart';
+import '../../core/l10n/l10n_helpers.dart';
+import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/inkbox_theme.dart';
+import '../../core/theme/theme_controller.dart';
 import '../../core/widgets/floating_surface.dart';
+import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
 import '../../data/providers/app_providers.dart';
 import '../book_reader/book_reader_settings.dart';
 import '../bookshelf/shelf_sheets.dart';
 import '../settings/appearance_sheet.dart';
-import '../settings/tts_settings_page.dart';
+import '../tts/tts_models.dart';
 import '../webdav_sync/webdav_sync_service.dart';
 
-/// "我的" (Mine) Hub tab — extensible personal & settings hub hosting
-/// Multi-Bookshelf/MangaShelf management, TTS Voice Settings, TXT TOC Rules,
-/// WebDAV Sync, and Theme Presets.
+/// "Me" Hub tab hosting library stats, Appearance & Language,
+/// Multi-Shelves, TTS Voice Settings, TXT TOC Rules, and WebDAV Sync.
 class MinePage extends ConsumerStatefulWidget {
   const MinePage({super.key});
 
@@ -43,9 +46,53 @@ class _MinePageState extends ConsumerState<MinePage> {
     } catch (_) {}
   }
 
+  String _languageDisplay(String code, BuildContext context) {
+    final l10n = context.l10n;
+    return switch (code) {
+      'zh' => l10n.languageZh,
+      'en' => l10n.languageEn,
+      'ja' => l10n.languageJa,
+      _ => l10n.languageSystem,
+    };
+  }
+
+  String _themeSummary(AppearanceState appearance, BuildContext context) {
+    final l10n = context.l10n;
+    final style = appearance.uiStyle == InkBoxUiStyle.floatingCard
+        ? l10n.uiStyleFloating
+        : l10n.uiStyleClassic;
+    final color = switch (appearance.themePreference) {
+      InkBoxThemePreference.crispLight => l10n.themeCrispLight,
+      InkBoxThemePreference.darkTheater => l10n.themeDarkTheater,
+      InkBoxThemePreference.oledBlack => l10n.themeOledBlack,
+      InkBoxThemePreference.system => l10n.themeFollowSystem,
+    };
+    return '$color · $style';
+  }
+
+  Future<void> _pickLanguage() async {
+    final l10n = context.l10n;
+    final appearance = ref.read(appearanceProvider);
+    final picked = await showInkOptionSheet<String>(
+      context: context,
+      title: l10n.appLanguageTitle,
+      selectedValue: appearance.appLocaleCode,
+      options: [
+        InkOptionItem(value: 'system', label: l10n.languageSystem),
+        InkOptionItem(value: 'zh', label: l10n.languageZh),
+        InkOptionItem(value: 'en', label: l10n.languageEn),
+        InkOptionItem(value: 'ja', label: l10n.languageJa),
+      ],
+    );
+    if (picked != null) {
+      await ref.read(appearanceProvider.notifier).setAppLocaleCode(picked);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
+    final l10n = context.l10n;
     final books = ref.watch(booksStreamProvider).valueOrNull ?? const <Book>[];
     final historyBooks =
         ref.watch(bookHistoryStreamProvider).valueOrNull ?? const <Book>[];
@@ -56,170 +103,190 @@ class _MinePageState extends ConsumerState<MinePage> {
     final mangaShelves =
         ref.watch(mangaShelvesStreamProvider).valueOrNull ?? const <Shelf>[];
     final readerSettings = ref.watch(bookReaderSettingsProvider);
+    final ttsConfig = ref.watch(ttsConfigProvider);
+    final appearance = ref.watch(appearanceProvider);
 
     final enabledRulesCount = tocRules.where((r) => r.enabled).length;
-    final finishedCount = books
-        .where((b) => b.progressRatio >= 0.99 || b.shelfGroup == '已读完')
-        .length;
+    final finishedCount = books.where(isBookFinished).length;
     final readingCount = books.length - finishedCount;
     final totalMinutes =
         historyBooks.fold<int>(0, (sum, b) => sum + b.readingTimeSec) ~/ 60;
-    final ttsLangLabel =
-        kTtsLanguageLabels[readerSettings.ttsLanguage] ?? '普通话';
-    final bottomPad = tokens.isFloatingCard ? 116.0 : 28.0;
+    final rateStr = readerSettings.ttsRate.toStringAsFixed(1);
+    final ttsSubtitle = ttsConfig.mode == TtsEngineMode.online
+        ? l10n.ttsMenuSummaryOnline(ttsConfig.activeProfile.name, rateStr)
+        : l10n.ttsMenuSummaryLocal(rateStr);
+
+    final bottomPad = isWideLayout(context)
+        ? 28.0
+        : (tokens.isFloatingCard ? 104.0 : 28.0);
+    final isDarkNow = Theme.of(context).brightness == Brightness.dark;
 
     return SafeArea(
       bottom: false,
-      child: Column(
-        children: [
-          FloatingHeaderBar(
-            title: '我的',
-            actions: [
-              InkCircleButton(
-                icon: InkIconWidget(
-                  InkIcon.floatingCard,
-                  size: 18,
-                  color: tokens.inkPrimary,
-                ),
-                tooltip: '主题预设',
-                onPressed: () => showAppearanceSheet(context),
-              ),
-            ],
-          ),
-          Expanded(
-            child: ListView(
-              padding: EdgeInsets.fromLTRB(14, 6, 14, bottomPad),
-              children: [
-                FloatingCard(
-                  padding: const EdgeInsets.all(16),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          Container(
-                            width: 44,
-                            height: 44,
-                            decoration: BoxDecoration(
-                              color: tokens.accentSoft,
-                              borderRadius: BorderRadius.circular(15),
-                            ),
-                            child: Center(
-                              child: InkIconWidget(
-                                InkIcon.bookshelf,
-                                size: 22,
-                                color: tokens.accentPrimary,
-                              ),
-                            ),
+      child: ResponsiveConstrainedBody(
+        child: Column(
+          children: [
+            FloatingHeaderBar(
+              title: l10n.mineTitle,
+              actions: [
+                InkCircleButton(
+                  icon: InkIconWidget(
+                    isDarkNow ? InkIcon.sun : InkIcon.moon,
+                    size: 17,
+                    color: tokens.inkPrimary,
+                  ),
+                  tooltip: l10n.themePresets,
+                  onPressed: () =>
+                      ref.read(appearanceProvider.notifier).setThemePreference(
+                            isDarkNow
+                                ? InkBoxThemePreference.crispLight
+                                : InkBoxThemePreference.darkTheater,
                           ),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '墨匣 InkBox',
-                                  style: TextStyle(
-                                    fontSize: 16,
-                                    fontWeight: FontWeight.w700,
-                                    color: tokens.inkPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '本地纯粹阅读空间',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: tokens.inkMuted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 16),
-                      Row(
-                        children: [
-                          _StatTile(label: '书架藏书', value: '${books.length}'),
-                          _StatTile(label: '在读', value: '$readingCount'),
-                          _StatTile(label: '已读完', value: '$finishedCount'),
-                          _StatTile(label: '累计分钟', value: '$totalMinutes'),
-                        ],
-                      ),
-                    ],
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
-                  child: Text(
-                    '设置与功能中心',
-                    style: TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w700,
-                      color: tokens.inkMuted,
-                    ),
-                  ),
-                ),
-                FloatingCard(
-                  padding: const EdgeInsets.symmetric(vertical: 6),
-                  child: Column(
-                    children: [
-                      _MineMenuTile(
-                        icon: InkIcon.bookshelf,
-                        title: '多书架与漫画架管理',
-                        subtitle:
-                            '书架 ${bookShelves.isEmpty ? 1 : bookShelves.length} 个 · 漫画架 ${mangaShelves.isEmpty ? 1 : mangaShelves.length} 个（支持新建与切换）',
-                        onTap: () => showDualShelfManagerSheet(context),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 54,
-                        color: tokens.subtleBorder,
-                      ),
-                      _MineMenuTile(
-                        icon: InkIcon.tts,
-                        title: 'TTS 语音朗读设置',
-                        subtitle:
-                            '语速 ${readerSettings.ttsRate.toStringAsFixed(1)}x · 音调 ${readerSettings.ttsPitch.toStringAsFixed(1)} · $ttsLangLabel',
-                        onTap: () => context.push('/mine/tts-settings'),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 54,
-                        color: tokens.subtleBorder,
-                      ),
-                      _MineMenuTile(
-                        icon: InkIcon.toc,
-                        title: 'TXT 目录识别规则',
-                        subtitle:
-                            '已启用 $enabledRulesCount / ${tocRules.length} 条规则 · 支持导入 Legado JSON',
-                        onTap: () => context.push('/mine/toc-rules'),
-                      ),
-                      Divider(
-                        height: 1,
-                        indent: 54,
-                        color: tokens.subtleBorder,
-                      ),
-                      _MineMenuTile(
-                        icon: InkIcon.syncCloud,
-                        title: 'WebDAV 多端同步',
-                        subtitle: _webdavCfg.isConfigured
-                            ? '${_webdavCfg.presetName} · ${_webdavCfg.remoteRoot}'
-                            : '未配置服务器 · 点击设置坚果云 / Alist / NAS 同步',
-                        onTap: () async {
-                          await context.push('/mine/sync');
-                          await _loadWebDavSummary();
-                        },
-                      ),
-                    ],
-                  ),
                 ),
               ],
             ),
-          ),
-        ],
+            Expanded(
+              child: ListView(
+                padding: EdgeInsets.fromLTRB(14, 6, 14, bottomPad),
+                children: [
+                  FloatingCard(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 16,
+                    ),
+                    child: Row(
+                      children: [
+                        _StatTile(
+                          label: l10n.statBooks,
+                          value: '${books.length}',
+                        ),
+                        _StatTile(
+                          label: l10n.statReading,
+                          value: '$readingCount',
+                        ),
+                        _StatTile(
+                          label: l10n.statFinished,
+                          value: '$finishedCount',
+                        ),
+                        _StatTile(
+                          label: l10n.statMinutes,
+                          value: '$totalMinutes',
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _SectionLabel(l10n.sectionAppearanceLanguage),
+                  FloatingCard(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      children: [
+                        _MineMenuTile(
+                          icon: InkIcon.floatingCard,
+                          title: l10n.appearanceSettings,
+                          subtitle: _themeSummary(appearance, context),
+                          onTap: () => showAppearanceSheet(context),
+                        ),
+                        Divider(
+                          height: 1,
+                          indent: 54,
+                          color: tokens.subtleBorder,
+                        ),
+                        _MineMenuTile(
+                          icon: InkIcon.language,
+                          title: l10n.appLanguageTitle,
+                          subtitle:
+                              _languageDisplay(appearance.appLocaleCode, context),
+                          onTap: _pickLanguage,
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  _SectionLabel(l10n.sectionReadingSync),
+                  FloatingCard(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: Column(
+                      children: [
+                        _MineMenuTile(
+                          icon: InkIcon.bookshelf,
+                          title: l10n.multiShelfManagerMenu,
+                          subtitle: l10n.multiShelfSummary(
+                            bookShelves.isEmpty ? 1 : bookShelves.length,
+                            mangaShelves.isEmpty ? 1 : mangaShelves.length,
+                          ),
+                          onTap: () => showDualShelfManagerSheet(context),
+                        ),
+                        Divider(
+                          height: 1,
+                          indent: 54,
+                          color: tokens.subtleBorder,
+                        ),
+                        _MineMenuTile(
+                          icon: InkIcon.tts,
+                          title: l10n.ttsMenuTitle,
+                          subtitle: ttsSubtitle,
+                          onTap: () => context.push('/mine/tts-settings'),
+                        ),
+                        Divider(
+                          height: 1,
+                          indent: 54,
+                          color: tokens.subtleBorder,
+                        ),
+                        _MineMenuTile(
+                          icon: InkIcon.toc,
+                          title: l10n.tocRulesMenuTitle,
+                          subtitle: l10n.tocRulesMenuSummary(
+                            enabledRulesCount,
+                            tocRules.length,
+                          ),
+                          onTap: () => context.push('/mine/toc-rules'),
+                        ),
+                        Divider(
+                          height: 1,
+                          indent: 54,
+                          color: tokens.subtleBorder,
+                        ),
+                        _MineMenuTile(
+                          icon: InkIcon.syncCloud,
+                          title: l10n.webdavMenuTitle,
+                          subtitle: _webdavCfg.isConfigured
+                              ? '${_webdavCfg.presetName} · ${_webdavCfg.remoteRoot}'
+                              : l10n.webdavUnconfigured,
+                          onTap: () async {
+                            await context.push('/mine/sync');
+                            await _loadWebDavSummary();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SectionLabel extends StatelessWidget {
+  const _SectionLabel(this.text);
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    final tokens = InkBoxTokens.of(context);
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(4, 0, 4, 8),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: tokens.inkMuted,
+        ),
       ),
     );
   }
@@ -239,7 +306,7 @@ class _StatTile extends StatelessWidget {
           Text(
             value,
             style: TextStyle(
-              fontSize: 17,
+              fontSize: 18,
               fontWeight: FontWeight.w700,
               color: tokens.inkPrimary,
               fontFeatures: const [FontFeature.tabularFigures()],
@@ -275,7 +342,7 @@ class _MineMenuTile extends StatelessWidget {
     return InkWell(
       onTap: onTap,
       child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 13),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
         child: Row(
           children: [
             Container(
@@ -283,7 +350,7 @@ class _MineMenuTile extends StatelessWidget {
               height: 34,
               decoration: BoxDecoration(
                 color: tokens.surfaceVariant,
-                borderRadius: BorderRadius.circular(11),
+                borderRadius: BorderRadius.circular(10),
               ),
               child: Center(
                 child: InkIconWidget(icon, size: 17, color: tokens.inkPrimary),

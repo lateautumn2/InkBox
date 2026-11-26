@@ -4,6 +4,7 @@ import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../data/db/app_database.dart';
+import 'book_paginator.dart';
 
 const List<String> kReaderHighlightColors = [
   '#EED29A', // 暖琥珀
@@ -68,6 +69,8 @@ class ReaderHighlightCanvas extends StatefulWidget {
     required this.chapterHighlights,
     this.selectedColorHex,
     this.activeSelectionGlobal,
+    this.ttsHighlightGlobal,
+    this.paragraphSpacing = 12.0,
     this.interactive = true,
     this.onSelectionChanged,
     this.onHighlightTapped,
@@ -82,6 +85,8 @@ class ReaderHighlightCanvas extends StatefulWidget {
   final List<Annotation> chapterHighlights;
   final String? selectedColorHex;
   final ({int start, int end})? activeSelectionGlobal;
+  final ({int start, int end})? ttsHighlightGlobal;
+  final double paragraphSpacing;
   final bool interactive;
   final void Function(int globalStart, int globalEnd, String selectedText)?
       onSelectionChanged;
@@ -334,9 +339,24 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
     return (start: ls, end: le);
   }
 
+  ({int start, int end})? get _localTts {
+    final g = widget.ttsHighlightGlobal;
+    if (g == null || widget.text.isEmpty) return null;
+    final sliceEnd = widget.baseOffset + widget.text.length;
+    if (g.end <= widget.baseOffset || g.start >= sliceEnd) return null;
+    final ls = (g.start - widget.baseOffset).clamp(0, widget.text.length);
+    final le = (g.end - widget.baseOffset).clamp(0, widget.text.length);
+    if (le <= ls) return null;
+    return (start: ls, end: le);
+  }
+
   TextPainter _layoutPainter(double maxWidth) {
     return TextPainter(
-      text: TextSpan(text: widget.text, style: widget.style),
+      text: BookPaginator.buildStyledSpan(
+        widget.text,
+        widget.style,
+        paragraphSpacing: widget.paragraphSpacing,
+      ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: maxWidth <= 0 ? 1.0 : maxWidth);
   }
@@ -466,10 +486,24 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
   TextSpan _buildRichSpan(
     List<ResolvedHighlightSpan> highlights,
     ({int start, int end})? sel,
+    ({int start, int end})? tts,
   ) {
-    if (widget.text.isEmpty || (highlights.isEmpty && sel == null)) {
-      return TextSpan(text: widget.text, style: widget.style);
+    if (widget.text.isEmpty ||
+        (highlights.isEmpty && sel == null && tts == null)) {
+      return BookPaginator.buildStyledSpan(
+        widget.text,
+        widget.style,
+        paragraphSpacing: widget.paragraphSpacing,
+      );
     }
+
+    final spacerIndices = BookPaginator.spacerNewlineIndices(widget.text);
+    final spacerHeight = widget.paragraphSpacing.clamp(0.5, 48.0);
+    final spacerStyle = widget.style.copyWith(
+      fontSize: spacerHeight,
+      height: 1.0,
+      letterSpacing: 0.0,
+    );
 
     // Collect all boundary cut points in [0, text.length]
     final cuts = <int>{0, widget.text.length};
@@ -481,6 +515,14 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
       cuts.add(sel.start);
       cuts.add(sel.end);
     }
+    if (tts != null) {
+      cuts.add(tts.start);
+      cuts.add(tts.end);
+    }
+    for (final sp in spacerIndices) {
+      cuts.add(sp);
+      cuts.add(sp + 1);
+    }
     final sortedCuts = cuts.toList()..sort();
 
     final children = <InlineSpan>[];
@@ -489,9 +531,15 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
       final segEnd = sortedCuts[i + 1];
       if (segEnd <= segStart) continue;
       final segText = widget.text.substring(segStart, segEnd);
+      if (segEnd == segStart + 1 && spacerIndices.contains(segStart)) {
+        children.add(TextSpan(text: segText, style: spacerStyle));
+        continue;
+      }
 
       final inSelection =
           sel != null && segStart >= sel.start && segEnd <= sel.end;
+      final inTts =
+          tts != null && segStart >= tts.start && segEnd <= tts.end;
       ResolvedHighlightSpan? activeHl;
       for (final h in highlights) {
         if (segStart >= h.localStart && segEnd <= h.localEnd) {
@@ -510,6 +558,21 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
               backgroundColor: selColor.withValues(
                 alpha: widget.isDarkPaper ? 0.32 : 0.42,
               ),
+            ),
+          ),
+        );
+      } else if (inTts) {
+        children.add(
+          TextSpan(
+            text: segText,
+            style: TextStyle(
+              backgroundColor: widget.accentColor.withValues(
+                alpha: widget.isDarkPaper ? 0.24 : 0.14,
+              ),
+              decoration: TextDecoration.underline,
+              decorationColor: widget.accentColor.withValues(alpha: 0.72),
+              decorationThickness: 1.8,
+              decorationStyle: TextDecorationStyle.solid,
             ),
           ),
         );
@@ -552,7 +615,8 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
       chapterHighlights: widget.chapterHighlights,
     );
     final sel = _localSelection;
-    final span = _buildRichSpan(highlights, sel);
+    final tts = _localTts;
+    final span = _buildRichSpan(highlights, sel, tts);
 
     return LayoutBuilder(
       builder: (context, constraints) {
@@ -566,6 +630,7 @@ class ReaderHighlightCanvasState extends State<ReaderHighlightCanvas> {
                     style: widget.style,
                     selection: sel,
                     accentColor: widget.accentColor,
+                    paragraphSpacing: widget.paragraphSpacing,
                   )
                 : null,
             child: Text.rich(
@@ -597,18 +662,24 @@ class _SelectionHandlesPainter extends CustomPainter {
     required this.style,
     required this.selection,
     required this.accentColor,
+    this.paragraphSpacing = 12.0,
   });
 
   final String text;
   final TextStyle style;
   final ({int start, int end}) selection;
   final Color accentColor;
+  final double paragraphSpacing;
 
   @override
   void paint(Canvas canvas, Size size) {
     if (text.isEmpty || size.width <= 0) return;
     final tp = TextPainter(
-      text: TextSpan(text: text, style: style),
+      text: BookPaginator.buildStyledSpan(
+        text,
+        style,
+        paragraphSpacing: paragraphSpacing,
+      ),
       textDirection: TextDirection.ltr,
     )..layout(maxWidth: size.width);
 
@@ -659,5 +730,7 @@ class _SelectionHandlesPainter extends CustomPainter {
   bool shouldRepaint(_SelectionHandlesPainter old) =>
       old.selection != selection ||
       old.text != text ||
+      old.style != style ||
+      old.paragraphSpacing != paragraphSpacing ||
       old.accentColor != accentColor;
 }

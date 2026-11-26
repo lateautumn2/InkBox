@@ -143,7 +143,7 @@ class FloatingHeaderBar extends StatelessWidget {
       return Padding(
         padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
         child: FloatingCard(
-          radius: 22,
+          radius: 18,
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
           child: row,
         ),

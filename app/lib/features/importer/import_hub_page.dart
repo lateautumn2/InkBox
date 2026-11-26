@@ -5,10 +5,13 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/icons/ink_icons.dart';
+import '../../core/l10n/l10n_helpers.dart';
+import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/inkbox_theme.dart';
 import '../../core/widgets/floating_surface.dart';
 import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
+import '../../data/ffi/rust_core_bridge.dart';
 import '../../data/providers/app_providers.dart';
 import 'import_service.dart';
 
@@ -23,12 +26,13 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
   bool _autoClassify = true;
   bool _overwriteExisting = false;
   bool _busy = false;
-  String _selectedFormat = '全部';
-  String _historyFilter = '全部'; // '全部' | '已移出' | '在书架'
+  bool _foldersExpanded = false;
+  String _selectedFormat = 'all';
+  String _historyFilter = 'all'; // 'all' | 'archived' | 'on_shelf'
   List<ImportCandidate> _candidates = [];
   ImportBatchResult? _lastResult;
 
-  static const _formats = ['全部', 'EPUB', 'TXT', 'PDF', 'MOBI', '漫画包'];
+  static const _formats = ['all', 'EPUB', 'TXT', 'PDF', 'MOBI', 'comic'];
 
   Future<void> _pickLocalFiles() async {
     if (_busy) return;
@@ -58,9 +62,14 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
       await svc.addWatchedDirectory();
       final scanned = await svc.scanWatchedFolders();
       if (!mounted) return;
-      setState(() => _candidates = scanned);
+      setState(() {
+        _candidates = scanned;
+        _foldersExpanded = true;
+      });
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('目录扫描完成：发现 ${scanned.length} 个可导入文件')),
+        SnackBar(
+          content: Text(context.l10n.folderScanDoneToast(scanned.length)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -76,7 +85,9 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
       if (!mounted) return;
       setState(() => _candidates = scanned);
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('扫描完成：发现 ${scanned.length} 个文件')),
+        SnackBar(
+          content: Text(context.l10n.folderScanDoneToast(scanned.length)),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -134,14 +145,15 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           );
         }
       });
+      final l10n = context.l10n;
       ScaffoldMessenger.of(context)
         ..hideCurrentSnackBar()
         ..showSnackBar(
           SnackBar(
-            content: Text('已覆盖更新《${outcome.title}》'),
+            content: Text(l10n.overwriteSuccessToast(outcome.title)),
             action: outcome.id != null
                 ? SnackBarAction(
-                    label: '立即阅读',
+                    label: l10n.readNow,
                     onPressed: () => _openOutcome(outcome),
                   )
                 : null,
@@ -149,8 +161,11 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
         );
     } catch (e) {
       if (!mounted) return;
+      final l10n = context.l10n;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('覆盖导入失败：$e')),
+        SnackBar(
+          content: Text(l10n.overwriteFailedToast(localizeError(l10n, e))),
+        ),
       );
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -162,22 +177,23 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
     required bool isComic,
     required int id,
   }) async {
+    final l10n = context.l10n;
     final confirmed = await showInkModal<bool>(
       context: context,
-      title: '彻底删除确认',
-      subtitle: '确定要彻底删除《$title》吗？将同时清除导入历史、阅读进度、书签笔记及应用内缓存文件，无法恢复。',
+      title: l10n.permanentDeleteTitle,
+      subtitle: l10n.permanentDeleteConfirm(title),
       builder: (_) => const SizedBox.shrink(),
       actionsBuilder: (ctx) => [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(false),
-          child: const Text('取消'),
+          child: Text(ctx.l10n.cancel),
         ),
         FilledButton(
           style: FilledButton.styleFrom(
             backgroundColor: InkBoxTokens.of(ctx).accentWarm,
           ),
           onPressed: () => Navigator.of(ctx).pop(true),
-          child: const Text('彻底删除'),
+          child: Text(ctx.l10n.removePermanentOption),
         ),
       ],
     );
@@ -191,7 +207,52 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
-      ..showSnackBar(SnackBar(content: Text('已彻底删除《$title》')));
+      ..showSnackBar(
+        SnackBar(content: Text(context.l10n.deletedForeverToast(title))),
+      );
+  }
+
+  Future<void> _showSupportedFormatsModal(CoreHealthInfo health) async {
+    final l10n = context.l10n;
+    final booksStr =
+        health.supportedBookFormats.map((e) => e.toUpperCase()).join(' · ');
+    final mangaStr = health.supportedComicFormats
+        .map((e) =>
+            e == 'folder' ? l10n.supportedFormatsImageFolder : e.toUpperCase())
+        .join(' · ');
+    await showInkModal<void>(
+      context: context,
+      title: l10n.supportedFormats,
+      builder: (ctx) => Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            l10n.supportedFormatsBooks(booksStr),
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: InkBoxTokens.of(ctx).inkPrimary,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            l10n.supportedFormatsManga(mangaStr),
+            style: TextStyle(
+              fontSize: 13,
+              height: 1.5,
+              color: InkBoxTokens.of(ctx).inkPrimary,
+            ),
+          ),
+        ],
+      ),
+      actionsBuilder: (ctx) => [
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: Text(ctx.l10n.close),
+        ),
+      ],
+    );
   }
 
   void _openOutcome(ImportFileOutcome item) {
@@ -207,18 +268,27 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
   }
 
   void _showResultSnack(ImportBatchResult res) {
-    final msg = '导入完成：书籍 +${res.booksImported}，漫画 +${res.mangasImported}'
-        '${res.skippedDuplicates > 0 ? "，已有 ${res.skippedDuplicates} 本" : ""}'
-        '${res.errors.isNotEmpty ? "，失败 ${res.errors.length}" : ""}';
+    final l10n = context.l10n;
+    final buf = StringBuffer(
+      l10n.importResultSummary(res.booksImported, res.mangasImported),
+    );
+    if (res.skippedDuplicates > 0) {
+      buf.write(l10n.importResultSkipped(res.skippedDuplicates));
+    }
+    if (res.errors.isNotEmpty) {
+      buf.write(l10n.importResultFailed(res.errors.length));
+    }
     ScaffoldMessenger.of(context)
       ..hideCurrentSnackBar()
       ..showSnackBar(
         SnackBar(
-          content: Text(msg),
+          content: Text(buf.toString()),
           duration: const Duration(seconds: 4),
           action: (res.booksImported > 0 || res.mangasImported > 0)
               ? SnackBarAction(
-                  label: res.booksImported > 0 ? '查看书架' : '查看漫画',
+                  label: res.booksImported > 0
+                      ? l10n.viewBookshelf
+                      : l10n.viewMangaShelf,
                   onPressed: () => context.go(
                     res.booksImported > 0 ? '/bookshelf' : '/manga',
                   ),
@@ -231,17 +301,22 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
+    final l10n = context.l10n;
     final health = ref.watch(coreHealthProvider);
     final foldersAsync = ref.watch(watchedFoldersStreamProvider);
     final bookHistory =
         ref.watch(bookHistoryStreamProvider).valueOrNull ?? const <Book>[];
     final mangaHistory =
         ref.watch(mangaHistoryStreamProvider).valueOrNull ?? const <Manga>[];
-    final bottomPad = tokens.isFloatingCard ? 168.0 : 88.0;
+    final wide = isWideLayout(context);
+    final expanded = isExpandedLayout(context);
+    final bottomPad = wide
+        ? 88.0
+        : (tokens.isFloatingCard ? 156.0 : 84.0);
 
     final visibleCandidates = _candidates.where((c) {
-      if (_selectedFormat == '全部') return true;
-      if (_selectedFormat == '漫画包') return c.targetKind == 'comic';
+      if (_selectedFormat == 'all') return true;
+      if (_selectedFormat == 'comic') return c.targetKind == 'comic';
       return c.ext == _selectedFormat;
     }).toList();
 
@@ -258,8 +333,10 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           addedAtMs: b.addedAtMs,
           localPath: b.filePath,
           fileExists: File(b.filePath).existsSync(),
-          subtitle:
-              '${b.author} · 已读 ${(b.progressRatio * 100).round()}%',
+          subtitle: l10n.historyBookSubtitle(
+            localizedAuthor(l10n, b.author),
+            (b.progressRatio * 100).round(),
+          ),
         ),
       ),
       ...mangaHistory.map(
@@ -271,18 +348,34 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           isArchived: m.isArchived,
           addedAtMs: m.addedAtMs,
           localPath: m.rootPath,
-          fileExists:
-              FileSystemEntity.typeSync(m.rootPath) != FileSystemEntityType.notFound,
-          subtitle: '${m.author} · 共 ${m.totalChapters} 话',
+          fileExists: FileSystemEntity.typeSync(m.rootPath) !=
+              FileSystemEntityType.notFound,
+          subtitle: l10n.historyMangaSubtitle(
+            localizedAuthor(l10n, m.author),
+            m.totalChapters,
+          ),
         ),
       ),
     ]..sort((a, b) => b.addedAtMs.compareTo(a.addedAtMs));
 
     final filteredHistory = historyEntries.where((h) {
-      if (_historyFilter == '已移出') return h.isArchived;
-      if (_historyFilter == '在书架') return !h.isArchived;
+      if (_historyFilter == 'archived') return h.isArchived;
+      if (_historyFilter == 'on_shelf') return !h.isArchived;
       return true;
     }).toList();
+
+    final actionWidgets = _buildActionsColumn(
+      tokens: tokens,
+      l10n: l10n,
+      foldersAsync: foldersAsync,
+    );
+    final listWidgets = _buildListsColumn(
+      tokens: tokens,
+      l10n: l10n,
+      visibleCandidates: visibleCandidates,
+      historyEntries: historyEntries,
+      filteredHistory: filteredHistory,
+    );
 
     return SafeArea(
       bottom: false,
@@ -290,19 +383,32 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
         children: [
           Column(
             children: [
-              FloatingHeaderBar(
-                title: '导入中心',
-                actions: [
-                  InkCircleButton(
-                    icon: InkIconWidget(
-                      InkIcon.refresh,
-                      size: 17,
-                      color: tokens.inkPrimary,
+              ResponsiveConstrainedBody(
+                maxWidth: expanded ? 1040 : kMaxContentWidth,
+                child: FloatingHeaderBar(
+                  title: l10n.importHubTitle,
+                  actions: [
+                    InkCircleButton(
+                      icon: InkIconWidget(
+                        InkIcon.info,
+                        size: 17,
+                        color: tokens.inkPrimary,
+                      ),
+                      tooltip: l10n.supportedFormats,
+                      onPressed: () => _showSupportedFormatsModal(health),
                     ),
-                    tooltip: '重新扫描监听目录',
-                    onPressed: _rescanWatched,
-                  ),
-                ],
+                    const SizedBox(width: 8),
+                    InkCircleButton(
+                      icon: InkIconWidget(
+                        InkIcon.refresh,
+                        size: 17,
+                        color: tokens.inkPrimary,
+                      ),
+                      tooltip: l10n.rescanFolders,
+                      onPressed: _rescanWatched,
+                    ),
+                  ],
+                ),
               ),
               if (_busy)
                 Padding(
@@ -313,569 +419,42 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                   ),
                 ),
               Expanded(
-                child: ListView(
-                  padding: EdgeInsets.fromLTRB(14, 6, 14, bottomPad),
-                  children: [
-                    Row(
-                      children: [
-                        Expanded(
-                          child: FloatingCard(
-                            onTap: _pickLocalFiles,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                InkIconWidget(
-                                  InkIcon.file,
-                                  size: 24,
-                                  color: tokens.inkPrimary,
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  '选择本地文件',
-                                  style: TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: tokens.inkPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '多选书漫批量入库',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: tokens.inkMuted,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: FloatingCard(
-                            backgroundColor: tokens.accentSoft,
-                            borderColor: Colors.transparent,
-                            onTap: _addAndScanDirectory,
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                InkIconWidget(
-                                  InkIcon.folder,
-                                  size: 24,
-                                  color: tokens.accentPrimary,
-                                ),
-                                const SizedBox(height: 10),
-                                Text(
-                                  '添加并扫描目录',
-                                  style: TextStyle(
-                                    fontSize: 13.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: tokens.accentPrimary,
-                                  ),
-                                ),
-                                const SizedBox(height: 2),
-                                Text(
-                                  '持久化监听新增书漫',
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: tokens.accentPrimary
-                                        .withValues(alpha: 0.8),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 12),
-                    FloatingCard(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 12,
-                      ),
-                      child: Column(
-                        children: [
-                          Row(
+                child: expanded
+                    ? Center(
+                        child: ConstrainedBox(
+                          constraints: const BoxConstraints(maxWidth: 1040),
+                          child: Row(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              InkIconWidget(
-                                InkIcon.spark,
-                                size: 20,
-                                color: tokens.accentPrimary,
-                              ),
-                              const SizedBox(width: 10),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '智能分拣入架',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: tokens.inkPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      '自动区分书籍书架与漫画架',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: tokens.inkMuted,
-                                      ),
-                                    ),
-                                  ],
+                              SizedBox(
+                                width: 380,
+                                child: ListView(
+                                  padding: EdgeInsets.fromLTRB(
+                                      14, 6, 8, bottomPad),
+                                  children: actionWidgets,
                                 ),
                               ),
-                              const SizedBox(width: 10),
-                              InkSwitch(
-                                value: _autoClassify,
-                                onChanged: (v) =>
-                                    setState(() => _autoClassify = v),
+                              Expanded(
+                                child: ListView(
+                                  padding: EdgeInsets.fromLTRB(
+                                      8, 6, 14, bottomPad),
+                                  children: listWidgets,
+                                ),
                               ),
                             ],
-                          ),
-                          Divider(height: 18, color: tokens.subtleBorder),
-                          Row(
-                            children: [
-                              InkIconWidget(
-                                InkIcon.refresh,
-                                size: 18,
-                                color: tokens.inkMuted,
-                              ),
-                              const SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Text(
-                                      '重复文件覆盖更新',
-                                      style: TextStyle(
-                                        fontSize: 13,
-                                        fontWeight: FontWeight.w600,
-                                        color: tokens.inkPrimary,
-                                      ),
-                                    ),
-                                    Text(
-                                      '遇到相同文件时直接更新路径与元信息',
-                                      style: TextStyle(
-                                        fontSize: 11,
-                                        color: tokens.inkMuted,
-                                      ),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              const SizedBox(width: 10),
-                              InkSwitch(
-                                value: _overwriteExisting,
-                                onChanged: (v) =>
-                                    setState(() => _overwriteExisting = v),
-                              ),
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    // Concise supported file types card (engine/feature details moved to README)
-                    FloatingCard(
-                      padding: const EdgeInsets.all(14),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                            '支持类型',
-                            style: TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.w700,
-                              color: tokens.inkPrimary,
-                            ),
-                          ),
-                          const SizedBox(height: 8),
-                          Text(
-                            '书籍：${health.supportedBookFormats.map((e) => e.toUpperCase()).join(' · ')}\n'
-                            '漫画：${health.supportedComicFormats.map((e) => e == 'folder' ? '图片文件夹' : e.toUpperCase()).join(' · ')}',
-                            style: TextStyle(
-                              fontSize: 11.5,
-                              height: 1.65,
-                              color: tokens.inkMuted,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (_lastResult != null && !_lastResult!.isEmpty) ...[
-                      const SizedBox(height: 12),
-                      _buildLastResultCard(tokens, _lastResult!),
-                    ],
-                    foldersAsync.when(
-                      loading: () => const SizedBox.shrink(),
-                      error: (_, _) => const SizedBox.shrink(),
-                      data: (folders) {
-                        if (folders.isEmpty) return const SizedBox.shrink();
-                        return Padding(
-                          padding: const EdgeInsets.only(top: 12),
-                          child: Wrap(
-                            spacing: 8,
-                            runSpacing: 8,
-                            children: folders.map((f) {
-                              return InkPillChip(
-                                label: f.displayName,
-                                leadingIcon: InkIcon.folder,
-                                onDelete: () => ref
-                                    .read(appDatabaseProvider)
-                                    .deleteWatchedFolder(f.id),
-                              );
-                            }).toList(),
-                          ),
-                        );
-                      },
-                    ),
-                    if (_candidates.isNotEmpty) ...[
-                      const SizedBox(height: 12),
-                      SizedBox(
-                        height: 36,
-                        child: ListView.separated(
-                          scrollDirection: Axis.horizontal,
-                          itemCount: _formats.length,
-                          separatorBuilder: (_, _) => const SizedBox(width: 8),
-                          itemBuilder: (context, idx) {
-                            final fmt = _formats[idx];
-                            final active = _selectedFormat == fmt;
-                            return InkPillChip(
-                              label: fmt,
-                              selected: active,
-                              elevated: true,
-                              onTap: () =>
-                                  setState(() => _selectedFormat = fmt),
-                            );
-                          },
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      ...visibleCandidates.map((c) {
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: FloatingCard(
-                            onTap: () =>
-                                setState(() => c.selected = !c.selected),
-                            borderColor:
-                                c.selected ? tokens.accentPrimary : null,
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  width: 22,
-                                  height: 22,
-                                  decoration: BoxDecoration(
-                                    color: c.selected
-                                        ? tokens.accentPrimary
-                                        : tokens.surfaceVariant,
-                                    borderRadius: BorderRadius.circular(6),
-                                  ),
-                                  child: c.selected
-                                      ? const Center(
-                                          child: InkIconWidget(
-                                            InkIcon.check,
-                                            size: 13,
-                                            color: Colors.white,
-                                          ),
-                                        )
-                                      : null,
-                                ),
-                                const SizedBox(width: 10),
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 7,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: tokens.surfaceVariant,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    c.ext,
-                                    style: TextStyle(
-                                      fontSize: 10,
-                                      fontWeight: FontWeight.w700,
-                                      color: tokens.inkPrimary,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Text(
-                                        c.name,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                          color: tokens.inkPrimary,
-                                        ),
-                                      ),
-                                      Text(
-                                        '${c.formattedSize} · 归类为${c.targetKind == "comic" ? "漫画架" : "书架"}',
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: tokens.inkMuted,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                TextButton(
-                                  onPressed: () => setState(() {
-                                    c.targetKind = c.targetKind == 'comic'
-                                        ? 'book'
-                                        : 'comic';
-                                  }),
-                                  child: Text(
-                                    c.targetKind == 'comic' ? '改书架' : '改漫画',
-                                    style: TextStyle(
-                                      fontSize: 11,
-                                      color: tokens.accentPrimary,
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      }),
-                    ],
-                    const SizedBox(height: 16),
-                    // Import History Section (supports quick restore to shelf & permanent deletion)
-                    Row(
-                      children: [
-                        InkIconWidget(
-                          InkIcon.history,
-                          size: 16,
-                          color: tokens.inkPrimary,
-                        ),
-                        const SizedBox(width: 6),
-                        Text(
-                          '导入历史 (${historyEntries.length})',
-                          style: TextStyle(
-                            fontSize: 13.5,
-                            fontWeight: FontWeight.w700,
-                            color: tokens.inkPrimary,
-                          ),
-                        ),
-                        const Spacer(),
-                        ...const ['全部', '已移出', '在书架'].map((f) {
-                          return Padding(
-                            padding: const EdgeInsets.only(left: 6),
-                            child: GestureDetector(
-                              onTap: () => setState(() => _historyFilter = f),
-                              child: Text(
-                                f,
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  fontWeight: _historyFilter == f
-                                      ? FontWeight.w700
-                                      : FontWeight.w500,
-                                  color: _historyFilter == f
-                                      ? tokens.accentPrimary
-                                      : tokens.inkMuted,
-                                ),
-                              ),
-                            ),
-                          );
-                        }),
-                      ],
-                    ),
-                    const SizedBox(height: 8),
-                    if (filteredHistory.isEmpty)
-                      FloatingCard(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 20,
-                        ),
-                        child: Center(
-                          child: Text(
-                            historyEntries.isEmpty
-                                ? '暂无导入历史，导入后的书籍与移出书架的记录都会保存在这里'
-                                : '当前筛选下无历史记录',
-                            style:
-                                TextStyle(fontSize: 12, color: tokens.inkMuted),
                           ),
                         ),
                       )
-                    else
-                      ...filteredHistory.map((item) {
-                        return Padding(
-                          padding: const EdgeInsets.only(bottom: 8),
-                          child: FloatingCard(
-                            padding: const EdgeInsets.symmetric(
-                              horizontal: 12,
-                              vertical: 10,
-                            ),
-                            child: Row(
-                              children: [
-                                Container(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 7,
-                                    vertical: 4,
-                                  ),
-                                  decoration: BoxDecoration(
-                                    color: item.isArchived
-                                        ? tokens.surfaceVariant
-                                        : tokens.accentSoft,
-                                    borderRadius: BorderRadius.circular(8),
-                                  ),
-                                  child: Text(
-                                    item.format,
-                                    style: TextStyle(
-                                      fontSize: 9.5,
-                                      fontWeight: FontWeight.w700,
-                                      color: item.isArchived
-                                          ? tokens.inkMuted
-                                          : tokens.accentPrimary,
-                                    ),
-                                  ),
-                                ),
-                                const SizedBox(width: 10),
-                                Expanded(
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      Row(
-                                        children: [
-                                          Flexible(
-                                            child: Text(
-                                              item.title,
-                                              maxLines: 1,
-                                              overflow: TextOverflow.ellipsis,
-                                              style: TextStyle(
-                                                fontSize: 13,
-                                                fontWeight: FontWeight.w600,
-                                                color: tokens.inkPrimary,
-                                              ),
-                                            ),
-                                          ),
-                                          const SizedBox(width: 6),
-                                          Text(
-                                            !item.fileExists
-                                                ? '文件缺失'
-                                                : (item.isArchived
-                                                    ? '已移出'
-                                                    : '在架'),
-                                            style: TextStyle(
-                                              fontSize: 10,
-                                              fontWeight: FontWeight.w600,
-                                              color: (!item.fileExists ||
-                                                      item.isArchived)
-                                                  ? tokens.accentWarm
-                                                  : tokens.statusOk,
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                      const SizedBox(height: 2),
-                                      Text(
-                                        item.subtitle,
-                                        maxLines: 1,
-                                        overflow: TextOverflow.ellipsis,
-                                        style: TextStyle(
-                                          fontSize: 11,
-                                          color: tokens.inkMuted,
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                ),
-                                if (item.isArchived)
-                                  TextButton(
-                                    style: TextButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                    onPressed: () async {
-                                      if (!item.fileExists) {
-                                        ScaffoldMessenger.of(context)
-                                          ..hideCurrentSnackBar()
-                                          ..showSnackBar(
-                                            SnackBar(
-                                              content: Text(
-                                                '《${item.title}》的本地文件已不存在，请重新选择文件导入',
-                                              ),
-                                            ),
-                                          );
-                                        return;
-                                      }
-                                      final db = ref.read(appDatabaseProvider);
-                                      if (item.isComic) {
-                                        await db.restoreMangaToShelf(item.id);
-                                      } else {
-                                        await db.restoreBookToShelf(item.id);
-                                      }
-                                      if (!context.mounted) return;
-                                      ScaffoldMessenger.of(context)
-                                        ..hideCurrentSnackBar()
-                                        ..showSnackBar(
-                                          SnackBar(
-                                            content: Text(
-                                              '已将《${item.title}》重新加入${item.isComic ? "漫画架" : "书架"}',
-                                            ),
-                                          ),
-                                        );
-                                    },
-                                    child: Text(
-                                      '入架',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        fontWeight: FontWeight.w700,
-                                        color: tokens.accentPrimary,
-                                      ),
-                                    ),
-                                  )
-                                else
-                                  TextButton(
-                                    style: TextButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                    ),
-                                    onPressed: () => context.push(
-                                      item.isComic
-                                          ? '/manga/${item.id}'
-                                          : '/reader/book/${item.id}',
-                                    ),
-                                    child: Text(
-                                      '阅读',
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: tokens.accentPrimary,
-                                      ),
-                                    ),
-                                  ),
-                                IconButton(
-                                  tooltip: '彻底删除',
-                                  visualDensity: VisualDensity.compact,
-                                  onPressed: () => _confirmPermanentDelete(
-                                    title: item.title,
-                                    isComic: item.isComic,
-                                    id: item.id,
-                                  ),
-                                  icon: InkIconWidget(
-                                    InkIcon.trash,
-                                    size: 16,
-                                    color: tokens.accentWarm,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        );
-                      }),
-                  ],
-                ),
+                    : ResponsiveConstrainedBody(
+                        child: ListView(
+                          padding: EdgeInsets.fromLTRB(14, 6, 14, bottomPad),
+                          children: [
+                            ...actionWidgets,
+                            const SizedBox(height: 14),
+                            ...listWidgets,
+                          ],
+                        ),
+                      ),
               ),
             ],
           ),
@@ -883,28 +462,37 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
             Positioned(
               left: 14,
               right: 14,
-              bottom: tokens.isFloatingCard ? 92 : 14,
-              child: FloatingCard(
-                frosted: true,
-                radius: 22,
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                  children: [
-                    Text(
-                      '已选 $selectedCount 项待入库',
-                      style: TextStyle(fontSize: 12.5, color: tokens.inkMuted),
+              bottom: (!wide && tokens.isFloatingCard) ? 84 : 14,
+              child: Center(
+                child: ConstrainedBox(
+                  constraints: BoxConstraints(
+                    maxWidth: wide ? 460 : double.infinity,
+                  ),
+                  child: FloatingCard(
+                    frosted: true,
+                    radius: 22,
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 16,
+                      vertical: 10,
                     ),
-                    FilledButton(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: tokens.accentPrimary,
-                        shape: const StadiumBorder(),
-                      ),
-                      onPressed: _busy ? null : _importSelected,
-                      child: Text('导入至架 ($selectedCount)'),
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          l10n.selectedCandidatesCount(selectedCount),
+                          style: TextStyle(fontSize: 12.5, color: tokens.inkMuted),
+                        ),
+                        FilledButton(
+                          style: FilledButton.styleFrom(
+                            backgroundColor: tokens.accentPrimary,
+                            shape: const StadiumBorder(),
+                          ),
+                          onPressed: _busy ? null : _importSelected,
+                          child: Text(l10n.importToShelfCount(selectedCount)),
+                        ),
+                      ],
                     ),
-                  ],
+                  ),
                 ),
               ),
             ),
@@ -913,7 +501,554 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
     );
   }
 
+  List<Widget> _buildActionsColumn({
+    required InkBoxTokens tokens,
+    required dynamic l10n,
+    required AsyncValue<List<WatchedFolder>> foldersAsync,
+  }) {
+    final loc = context.l10n;
+    return [
+      Row(
+        children: [
+          Expanded(
+            child: FloatingCard(
+              onTap: _pickLocalFiles,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              child: Row(
+                children: [
+                  InkIconWidget(
+                    InkIcon.file,
+                    size: 20,
+                    color: tokens.inkPrimary,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      loc.pickLocalFiles,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                        color: tokens.inkPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+            child: FloatingCard(
+              backgroundColor: tokens.accentSoft,
+              borderColor: Colors.transparent,
+              onTap: _addAndScanDirectory,
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              child: Row(
+                children: [
+                  InkIconWidget(
+                    InkIcon.folder,
+                    size: 20,
+                    color: tokens.accentPrimary,
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      loc.addAndScanFolder,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: TextStyle(
+                        fontSize: 13.5,
+                        fontWeight: FontWeight.w700,
+                        color: tokens.accentPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+      const SizedBox(height: 10),
+      FloatingCard(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                InkIconWidget(
+                  InkIcon.spark,
+                  size: 18,
+                  color: tokens.accentPrimary,
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    loc.smartAutoClassify,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: tokens.inkPrimary,
+                    ),
+                  ),
+                ),
+                InkSwitch(
+                  value: _autoClassify,
+                  onChanged: (v) => setState(() => _autoClassify = v),
+                ),
+              ],
+            ),
+            Divider(height: 16, color: tokens.subtleBorder),
+            Row(
+              children: [
+                InkIconWidget(
+                  InkIcon.refresh,
+                  size: 17,
+                  color: tokens.inkMuted,
+                ),
+                const SizedBox(width: 11),
+                Expanded(
+                  child: Text(
+                    loc.overwriteDuplicates,
+                    style: TextStyle(
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                      color: tokens.inkPrimary,
+                    ),
+                  ),
+                ),
+                InkSwitch(
+                  value: _overwriteExisting,
+                  onChanged: (v) => setState(() => _overwriteExisting = v),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+      foldersAsync.when(
+        loading: () => const SizedBox.shrink(),
+        error: (_, _) => const SizedBox.shrink(),
+        data: (folders) {
+          if (folders.isEmpty) return const SizedBox.shrink();
+          return Padding(
+            padding: const EdgeInsets.only(top: 10),
+            child: FloatingCard(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  InkWell(
+                    onTap: () =>
+                        setState(() => _foldersExpanded = !_foldersExpanded),
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 4),
+                      child: Row(
+                        children: [
+                          InkIconWidget(
+                            InkIcon.folder,
+                            size: 15,
+                            color: tokens.accentPrimary,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              loc.watchedFoldersTitle(folders.length),
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: tokens.inkPrimary,
+                              ),
+                            ),
+                          ),
+                          InkIconWidget(
+                            _foldersExpanded
+                                ? InkIcon.chevronDown
+                                : InkIcon.chevronRight,
+                            size: 14,
+                            color: tokens.inkMuted,
+                          ),
+                        ],
+                      ),
+                    ),
+                  ),
+                  if (_foldersExpanded) ...[
+                    const SizedBox(height: 8),
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 8,
+                      children: folders.map((f) {
+                        return InkPillChip(
+                          label: f.displayName,
+                          leadingIcon: InkIcon.folder,
+                          onDelete: () => ref
+                              .read(appDatabaseProvider)
+                              .deleteWatchedFolder(f.id),
+                        );
+                      }).toList(),
+                    ),
+                  ],
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+      if (_lastResult != null && !_lastResult!.isEmpty) ...[
+        const SizedBox(height: 10),
+        _buildLastResultCard(tokens, _lastResult!),
+      ],
+    ];
+  }
+
+  List<Widget> _buildListsColumn({
+    required InkBoxTokens tokens,
+    required dynamic l10n,
+    required List<ImportCandidate> visibleCandidates,
+    required List<_HistoryEntry> historyEntries,
+    required List<_HistoryEntry> filteredHistory,
+  }) {
+    final loc = context.l10n;
+    return [
+      if (_candidates.isNotEmpty) ...[
+        SizedBox(
+          height: 36,
+          child: ListView.separated(
+            scrollDirection: Axis.horizontal,
+            itemCount: _formats.length,
+            separatorBuilder: (_, _) => const SizedBox(width: 8),
+            itemBuilder: (context, idx) {
+              final fmt = _formats[idx];
+              final label = fmt == 'all'
+                  ? loc.formatAll
+                  : (fmt == 'comic' ? loc.formatComicArchive : fmt);
+              return InkPillChip(
+                label: label,
+                selected: _selectedFormat == fmt,
+                elevated: true,
+                onTap: () => setState(() => _selectedFormat = fmt),
+              );
+            },
+          ),
+        ),
+        const SizedBox(height: 10),
+        ...visibleCandidates.map((c) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: FloatingCard(
+              onTap: () => setState(() => c.selected = !c.selected),
+              borderColor: c.selected ? tokens.accentPrimary : null,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 12,
+                vertical: 10,
+              ),
+              child: Row(
+                children: [
+                  Container(
+                    width: 22,
+                    height: 22,
+                    decoration: BoxDecoration(
+                      color: c.selected
+                          ? tokens.accentPrimary
+                          : tokens.surfaceVariant,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: c.selected
+                        ? const Center(
+                            child: InkIconWidget(
+                              InkIcon.check,
+                              size: 13,
+                              color: Colors.white,
+                            ),
+                          )
+                        : null,
+                  ),
+                  const SizedBox(width: 10),
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: tokens.surfaceVariant,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      c.ext,
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w700,
+                        color: tokens.inkPrimary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          c.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 13,
+                            fontWeight: FontWeight.w600,
+                            color: tokens.inkPrimary,
+                          ),
+                        ),
+                        Text(
+                          '${c.formattedSize} · ${c.targetKind == "comic" ? loc.classifiedAsComic : loc.classifiedAsBook}',
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: tokens.inkMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  TextButton(
+                    onPressed: () => setState(() {
+                      c.targetKind =
+                          c.targetKind == 'comic' ? 'book' : 'comic';
+                    }),
+                    child: Text(
+                      c.targetKind == 'comic'
+                          ? loc.switchToBook
+                          : loc.switchToComic,
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: tokens.accentPrimary,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+        const SizedBox(height: 12),
+      ],
+      Row(
+        children: [
+          InkIconWidget(
+            InkIcon.history,
+            size: 16,
+            color: tokens.inkPrimary,
+          ),
+          const SizedBox(width: 6),
+          Text(
+            loc.importHistoryTitle(historyEntries.length),
+            style: TextStyle(
+              fontSize: 13.5,
+              fontWeight: FontWeight.w700,
+              color: tokens.inkPrimary,
+            ),
+          ),
+          const Spacer(),
+          ...[
+            ('all', loc.historyAll),
+            ('archived', loc.historyArchived),
+            ('on_shelf', loc.historyOnShelf),
+          ].map((pair) {
+            final active = _historyFilter == pair.$1;
+            return Padding(
+              padding: const EdgeInsets.only(left: 8),
+              child: GestureDetector(
+                onTap: () => setState(() => _historyFilter = pair.$1),
+                child: Text(
+                  pair.$2,
+                  style: TextStyle(
+                    fontSize: 11.5,
+                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
+                    color: active ? tokens.accentPrimary : tokens.inkMuted,
+                  ),
+                ),
+              ),
+            );
+          }),
+        ],
+      ),
+      const SizedBox(height: 8),
+      if (filteredHistory.isEmpty)
+        FloatingCard(
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 20),
+          child: Center(
+            child: Text(
+              historyEntries.isEmpty
+                  ? loc.noImportHistory
+                  : loc.noMatchingHistory,
+              textAlign: TextAlign.center,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
+          ),
+        )
+      else
+        ...filteredHistory.map((item) {
+          return Padding(
+            padding: const EdgeInsets.only(bottom: 8),
+            child: FloatingCard(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+              child: Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 7,
+                      vertical: 4,
+                    ),
+                    decoration: BoxDecoration(
+                      color: item.isArchived
+                          ? tokens.surfaceVariant
+                          : tokens.accentSoft,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      item.format,
+                      style: TextStyle(
+                        fontSize: 9.5,
+                        fontWeight: FontWeight.w700,
+                        color: item.isArchived
+                            ? tokens.inkMuted
+                            : tokens.accentPrimary,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(
+                          children: [
+                            Flexible(
+                              child: Text(
+                                item.title,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  fontWeight: FontWeight.w600,
+                                  color: tokens.inkPrimary,
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 6),
+                            Text(
+                              !item.fileExists
+                                  ? loc.fileMissingBadge
+                                  : (item.isArchived
+                                      ? loc.archivedBadge
+                                      : loc.onShelfBadge),
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.w600,
+                                color: (!item.fileExists || item.isArchived)
+                                    ? tokens.accentWarm
+                                    : tokens.statusOk,
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            color: tokens.inkMuted,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (item.isArchived)
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () async {
+                        if (!item.fileExists) {
+                          ScaffoldMessenger.of(context)
+                            ..hideCurrentSnackBar()
+                            ..showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  loc.fileMissingReimportToast(item.title),
+                                ),
+                              ),
+                            );
+                          return;
+                        }
+                        final db = ref.read(appDatabaseProvider);
+                        if (item.isComic) {
+                          await db.restoreMangaToShelf(item.id);
+                        } else {
+                          await db.restoreBookToShelf(item.id);
+                        }
+                        if (!mounted) return;
+                        ScaffoldMessenger.of(context)
+                          ..hideCurrentSnackBar()
+                          ..showSnackBar(
+                            SnackBar(
+                              content:
+                                  Text(loc.restoredToShelfToast(item.title)),
+                            ),
+                          );
+                      },
+                      child: Text(
+                        loc.restoreToShelf,
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: tokens.accentPrimary,
+                        ),
+                      ),
+                    )
+                  else
+                    TextButton(
+                      style: TextButton.styleFrom(
+                        visualDensity: VisualDensity.compact,
+                      ),
+                      onPressed: () => context.push(
+                        item.isComic
+                            ? '/manga/${item.id}'
+                            : '/reader/book/${item.id}',
+                      ),
+                      child: Text(
+                        loc.readNow,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: tokens.accentPrimary,
+                        ),
+                      ),
+                    ),
+                  IconButton(
+                    tooltip: loc.removePermanentOption,
+                    visualDensity: VisualDensity.compact,
+                    onPressed: () => _confirmPermanentDelete(
+                      title: item.title,
+                      isComic: item.isComic,
+                      id: item.id,
+                    ),
+                    icon: InkIconWidget(
+                      InkIcon.trash,
+                      size: 16,
+                      color: tokens.accentWarm,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          );
+        }),
+    ];
+  }
+
   Widget _buildLastResultCard(InkBoxTokens tokens, ImportBatchResult res) {
+    final l10n = context.l10n;
     return FloatingCard(
       padding: const EdgeInsets.all(14),
       child: Column(
@@ -924,14 +1059,13 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
               InkIconWidget(
                 res.errors.isNotEmpty ? InkIcon.spark : InkIcon.check,
                 size: 16,
-                color: res.errors.isNotEmpty
-                    ? tokens.accentWarm
-                    : tokens.statusOk,
+                color:
+                    res.errors.isNotEmpty ? tokens.accentWarm : tokens.statusOk,
               ),
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  '本次导入结果',
+                  l10n.lastImportResultTitle,
                   style: TextStyle(
                     fontSize: 13,
                     fontWeight: FontWeight.w700,
@@ -945,7 +1079,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                   visualDensity: VisualDensity.compact,
                 ),
                 child: Text(
-                  '收起',
+                  l10n.collapseLabel,
                   style: TextStyle(fontSize: 11.5, color: tokens.inkMuted),
                 ),
               ),
@@ -960,7 +1094,9 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        '${item.repaired ? "已恢复/更新" : "已入架"}：《${item.title}》（${item.kind == "comic" ? "漫画架" : "书架"}）',
+                        item.repaired
+                            ? l10n.repairedStatus(item.title)
+                            : l10n.importedStatus(item.title),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -975,7 +1111,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                         visualDensity: VisualDensity.compact,
                       ),
                       child: Text(
-                        '立即阅读',
+                        l10n.readNow,
                         style: TextStyle(
                           fontSize: 11.5,
                           color: tokens.accentPrimary,
@@ -996,8 +1132,8 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        '已在${dup.kind == "comic" ? "漫画架" : "书架"}：《${dup.title}》（分组：${dup.shelfGroup}）',
-                        maxLines: 2,
+                        l10n.duplicateStatus(dup.title),
+                        maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
                           fontSize: 12,
@@ -1011,7 +1147,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                         visualDensity: VisualDensity.compact,
                       ),
                       child: Text(
-                        '打开',
+                        l10n.open,
                         style: TextStyle(
                           fontSize: 11.5,
                           color: tokens.accentPrimary,
@@ -1025,7 +1161,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                         visualDensity: VisualDensity.compact,
                       ),
                       child: Text(
-                        '覆盖重导',
+                        l10n.overwriteReimport,
                         style: TextStyle(
                           fontSize: 11.5,
                           color: tokens.accentWarm,
@@ -1043,7 +1179,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
               return Padding(
                 padding: const EdgeInsets.only(bottom: 4),
                 child: Text(
-                  '失败：$err',
+                  localizeError(l10n, err),
                   style: TextStyle(
                     fontSize: 11.5,
                     color: tokens.accentWarm,

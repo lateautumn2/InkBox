@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math' as math;
 
 import 'package:drift/drift.dart' as drift;
 import 'package:flutter/services.dart';
@@ -8,6 +9,8 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../core/icons/ink_icons.dart';
+import '../../core/l10n/l10n_helpers.dart';
+import '../../core/layout/responsive_layout.dart';
 import '../../core/theme/inkbox_theme.dart';
 import '../../core/widgets/floating_surface.dart';
 import '../../core/widgets/ink_controls.dart';
@@ -15,6 +18,9 @@ import '../../data/db/app_database.dart';
 import '../../data/ffi/rust_core_bridge.dart';
 import '../../data/platform/platform_bridge.dart';
 import '../../data/providers/app_providers.dart';
+import '../tts/tts_models.dart';
+import '../tts/tts_playback_controller.dart';
+import '../tts/tts_text_chunker.dart';
 import 'book_paginator.dart';
 import 'book_reader_settings.dart';
 import 'page_turn_painter.dart';
@@ -68,20 +74,25 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   bool _menuVisible = false;
   String? _sheetTab; // null | toc | style | anim | more
   bool _ttsPlaying = false;
-  String? _activeTtsUtteranceId;
   bool _ttsExcerptOnly = false;
   bool _ttsPausedForSettings = false;
   int _ttsScrollOffset = 0;
-  Timer? _ttsSleepTimer;
-  DateTime? _ttsSleepEndAt;
+  late final TtsPlaybackController _ttsCtrl;
+  BookPaperTheme _lastLightPaper = BookPaperTheme.white;
+  double _readerBrightness = 1.0;
+  bool _showBrightnessIndicator = false;
+  Timer? _brightnessHideTimer;
 
   bool _autoScrolling = false;
   Timer? _autoScrollTimer;
   final ScrollController _scrollCtrl = ScrollController();
   final ScrollController _tocScrollCtrl = ScrollController();
   final PageTurnController _pageTurnCtrl = PageTurnController();
-  final GlobalKey<ReaderHighlightCanvasState> _activeCanvasKey =
+  final GlobalKey<ReaderHighlightCanvasState> _leftCanvasKey =
       GlobalKey<ReaderHighlightCanvasState>();
+  final GlobalKey<ReaderHighlightCanvasState> _rightCanvasKey =
+      GlobalKey<ReaderHighlightCanvasState>();
+  bool _isDualSpread = false;
 
   // Interactive Highlight / Underline Selection & Inspection State
   List<Annotation> _annotations = const [];
@@ -104,15 +115,41 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     super.initState();
     _db = ref.read(appDatabaseProvider);
     _platform = ref.read(platformBridgeProvider);
+    final initPaper = ref.read(bookReaderSettingsProvider).paperTheme;
+    if (initPaper != BookPaperTheme.dark && initPaper != BookPaperTheme.oled) {
+      _lastLightPaper = initPaper;
+    }
+    _ttsCtrl = TtsPlaybackController(platform: _platform)
+      ..addListener(_onTtsControllerChanged)
+      ..onPageCompleted = _handleTtsPageCompleted
+      ..onFallbackNotice = ((code) {
+        if (mounted) _toast(context.l10n.ttsOnlineFallbackNotice);
+      })
+      ..onErrorNotice = ((code) {
+        if (mounted) _toast(localizeError(context.l10n, code));
+      })
+      ..onSleepTimerExpired = (() {
+        if (mounted) {
+          setState(() => _ttsPlaying = false);
+          _toast(context.l10n.ttsTimerExpiredToast);
+        }
+      });
     _sessionStart = DateTime.now();
     _scrollCtrl.addListener(_onScrollChanged);
     _initReader();
   }
 
+  void _onTtsControllerChanged() {
+    if (!mounted) return;
+    setState(() {
+      _ttsPlaying = _ttsCtrl.isActive;
+    });
+  }
+
   @override
   void dispose() {
     _autoScrollTimer?.cancel();
-    _ttsSleepTimer?.cancel();
+    _brightnessHideTimer?.cancel();
     _scrollCtrl.removeListener(_onScrollChanged);
     _scrollCtrl.dispose();
     _tocScrollCtrl.dispose();
@@ -120,7 +157,8 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     _persistProgress(flushTime: true);
     _platform.setVolumeKeyPaging(false);
     _platform.setKeepScreenOn(false);
-    _platform.stopTts();
+    _ttsCtrl.removeListener(_onTtsControllerChanged);
+    _ttsCtrl.dispose();
     super.dispose();
   }
 
@@ -162,30 +200,6 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           _triggerTurnNext();
         } else if (dir == 'up') {
           _triggerTurnPrev();
-        }
-      } else if ((ev.type == 'tts_done' || ev.type == 'tts_error') &&
-          _ttsPlaying &&
-          !_ttsPausedForSettings) {
-        final evUid = (ev.payload['utteranceId'] as String? ?? '').trim();
-        if (_activeTtsUtteranceId != null &&
-            evUid.isNotEmpty &&
-            evUid != _activeTtsUtteranceId) {
-          return;
-        }
-        if (ev.type == 'tts_error' || _ttsExcerptOnly) {
-          _stopTtsPlayback();
-          return;
-        }
-        final curSettings = ref.read(bookReaderSettingsProvider);
-        final isScroll = !_isNativePdfBitmapMode &&
-            curSettings.pageTurnMode == PageTurnMode.scroll;
-        if (isScroll) {
-          _advanceScrollTts(curSettings);
-        } else if (curSettings.ttsAutoTurnPage && _canTurnNext) {
-          _commitTurnNext(fromTtsAutoTurn: true);
-          _speakCurrentPage();
-        } else {
-          _stopTtsPlayback();
         }
       }
     });
@@ -443,14 +457,38 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     }
   }
 
+  bool _computeIsDualSpread(Size viewport, BookReaderSettings settings) {
+    if (_isNativePdfBitmapMode || settings.pageTurnMode == PageTurnMode.scroll) {
+      return false;
+    }
+    return switch (settings.pageLayoutMode) {
+      BookPageLayoutMode.single => false,
+      BookPageLayoutMode.dual => viewport.width >= kForcedDualMinWidth,
+      BookPageLayoutMode.auto =>
+        viewport.width >= kDualPageMinWidth && viewport.width > viewport.height,
+    };
+  }
+
+  int get _pageStep => _isDualSpread ? 2 : 1;
+
   List<BookPageSlice> _paginateText(
     String text,
     Size viewport,
     EdgeInsets safePadding,
     BookReaderSettings settings,
   ) {
-    final usableWidth =
-        (viewport.width - settings.horizontalPadding * 2).clamp(100.0, 1400.0);
+    final dual = _computeIsDualSpread(viewport, settings);
+    final double usableWidth;
+    if (dual) {
+      final outerH = settings.horizontalPadding.clamp(16.0, 32.0);
+      const gutter = 44.0;
+      usableWidth =
+          ((viewport.width - outerH * 2 - gutter) / 2).clamp(160.0, 640.0);
+    } else {
+      final colWidth = math.min(viewport.width, kMaxSingleReaderWidth);
+      usableWidth = (colWidth - settings.horizontalPadding * 2)
+          .clamp(100.0, kMaxSingleReaderWidth);
+    }
     final usableHeight =
         (viewport.height - safePadding.top - safePadding.bottom - 96.0)
             .clamp(140.0, 2000.0);
@@ -464,6 +502,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         color: settings.paperTheme.foreground,
       ),
       indentParagraphs: settings.indentFirstLine,
+      paragraphSpacing: settings.paragraphSpacing,
     );
   }
 
@@ -474,13 +513,17 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   ) {
     final chapter = _loadedChapter;
     if (chapter == null) return;
+    final dual = _computeIsDualSpread(viewport, settings);
     final hash = Object.hash(
       chapter.index,
       chapter.text.length,
       settings.fontSize,
       settings.lineHeight,
+      settings.paragraphSpacing,
       settings.horizontalPadding,
       settings.indentFirstLine,
+      settings.pageLayoutMode,
+      dual,
       viewport.width.round(),
       viewport.height.round(),
       safePadding.top.round(),
@@ -495,10 +538,12 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     _lastViewport = viewport;
     _lastSafePadding = safePadding;
     _lastSettingsHash = hash;
+    _isDualSpread = dual;
 
     final slices = _paginateText(chapter.text, viewport, safePadding, settings);
     _pages = slices;
-    _pageIdx = BookPaginator.findPageForOffset(slices, _anchorCharOffset);
+    final rawIdx = BookPaginator.findPageForOffset(slices, _anchorCharOffset);
+    _pageIdx = dual ? (rawIdx ~/ 2) * 2 : rawIdx;
 
     if (_prevChapter != null) {
       _prevChapterPages =
@@ -547,7 +592,8 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       return _chapterIdx + 1 < _chapters.length;
     }
     if (_pages.isEmpty) return _chapterIdx + 1 < _chapters.length;
-    return _pageIdx + 1 < _pages.length || _chapterIdx + 1 < _chapters.length;
+    return _pageIdx + _pageStep < _pages.length ||
+        _chapterIdx + 1 < _chapters.length;
   }
 
   bool get _canTurnPrev {
@@ -567,7 +613,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       if (_chapterIdx + 1 < _chapters.length) {
         _loadChapter(_chapterIdx + 1);
       } else {
-        _toast('已是最后一页');
+        _toast(context.l10n.lastPageToast);
       }
       return;
     }
@@ -593,7 +639,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       if (_chapterIdx > 0) {
         _loadChapter(_chapterIdx - 1);
       } else {
-        _toast('已是第一页');
+        _toast(context.l10n.firstPageToast);
       }
       return;
     }
@@ -617,7 +663,9 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       } else if (!forward && _chapterIdx > 0) {
         _loadChapter(_chapterIdx - 1, jumpEnd: true);
       } else {
-        _toast(forward ? '已是最后一页' : '已是第一页');
+        _toast(
+          forward ? context.l10n.lastPageToast : context.l10n.firstPageToast,
+        );
       }
       return;
     }
@@ -629,7 +677,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         if (_chapterIdx + 1 < _chapters.length) {
           _loadChapter(_chapterIdx + 1);
         } else {
-          _toast('已是最后一页');
+          _toast(context.l10n.lastPageToast);
         }
       } else {
         final target = (pos.pixels + step).clamp(0.0, pos.maxScrollExtent);
@@ -644,7 +692,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         if (_chapterIdx > 0) {
           _loadChapter(_chapterIdx - 1, jumpEnd: true);
         } else {
-          _toast('已是第一页');
+          _toast(context.l10n.firstPageToast);
         }
       } else {
         final target = (pos.pixels - step).clamp(0.0, pos.maxScrollExtent);
@@ -658,9 +706,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   void _commitTurnNext({bool fromTtsAutoTurn = false}) {
-    if (_pages.isNotEmpty && _pageIdx + 1 < _pages.length) {
+    final nextIdx = _pageIdx + _pageStep;
+    if (_pages.isNotEmpty && nextIdx < _pages.length) {
       setState(() {
-        _pageIdx++;
+        _pageIdx = _isDualSpread ? (nextIdx ~/ 2) * 2 : nextIdx;
         _anchorCharOffset = _pages[_pageIdx].startOffset;
         _menuVisible = false;
         _sheetTab = null;
@@ -709,13 +758,15 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       return;
     }
 
-    _toast('已是最后一页');
+    _toast(context.l10n.lastPageToast);
   }
 
   void _commitTurnPrev() {
     if (_pages.isNotEmpty && _pageIdx > 0) {
+      final rawPrev = (_pageIdx - _pageStep).clamp(0, _pages.length - 1);
+      final targetIdx = _isDualSpread ? (rawPrev ~/ 2) * 2 : rawPrev;
       setState(() {
-        _pageIdx--;
+        _pageIdx = targetIdx;
         _anchorCharOffset = _pages[_pageIdx].startOffset;
         _menuVisible = false;
         _sheetTab = null;
@@ -734,13 +785,15 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           _prevChapter!.index == _chapterIdx - 1 &&
           _prevChapterPages.isNotEmpty) {
         final gen = ++_preloadGeneration;
+        final rawLast = _prevChapterPages.length - 1;
+        final targetLast = _isDualSpread ? (rawLast ~/ 2) * 2 : rawLast;
         setState(() {
           _nextChapter = _loadedChapter;
           _nextChapterPages = _pages;
           _chapterIdx--;
           _loadedChapter = _prevChapter;
           _pages = _prevChapterPages;
-          _pageIdx = _pages.length - 1;
+          _pageIdx = targetLast;
           _anchorCharOffset = _pages[_pageIdx].startOffset;
           _prevChapter = null;
           _prevChapterPages = const [];
@@ -764,7 +817,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       return;
     }
 
-    _toast('已是第一页');
+    _toast(context.l10n.firstPageToast);
   }
 
   bool _tryInterceptCanvasTap(Offset globalPosition) {
@@ -773,8 +826,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       setState(() => _activeSelection = null);
       return true;
     }
-    if (_activeCanvasKey.currentState?.tryHandleTapAtGlobal(globalPosition) ==
-        true) {
+    if (_leftCanvasKey.currentState?.tryHandleTapAtGlobal(globalPosition) ==
+            true ||
+        _rightCanvasKey.currentState?.tryHandleTapAtGlobal(globalPosition) ==
+            true) {
       return true;
     }
     if (_inspectedAnnotation != null) {
@@ -856,9 +911,13 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       }).toList();
     }
     if (pages != null && pages.isNotEmpty && pageIndex != null) {
+      final secondIdx = _isDualSpread && pageIndex + 1 < pages.length
+          ? pageIndex + 1
+          : null;
       return chBookmarks.where((a) {
         final off = ParsedAnnotationLocator.parse(a.locator).startOffset;
-        return BookPaginator.findPageForOffset(pages, off) == pageIndex;
+        final bmPage = BookPaginator.findPageForOffset(pages, off);
+        return bmPage == pageIndex || (secondIdx != null && bmPage == secondIdx);
       }).toList();
     }
     return chBookmarks;
@@ -885,7 +944,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         await _db.softDeleteAnnotation(b.uuid);
       }
       await _refreshAnnotations();
-      _toast('已取消本页书签');
+      if (mounted) _toast(context.l10n.bookmarkRemovedToast);
       return;
     }
 
@@ -928,14 +987,14 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       ),
     );
     await _refreshAnnotations();
-    _toast('已添加书签');
+    if (mounted) _toast(context.l10n.bookmarkAddedToast);
   }
 
   // --- Interactive Highlight / Underline (`划线`) & Notes ---
 
   void _startToolbarHighlightSelection() {
     if (_isNativePdfBitmapMode) {
-      _toast('原版 PDF 位图暂不支持直接划线，请点击顶栏「文本重排」后再划线');
+      _toast(context.l10n.pdfBitmapNoHighlightToast);
       return;
     }
     final settings = ref.read(bookReaderSettingsProvider);
@@ -952,13 +1011,22 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           .clamp(0, formatted.isEmpty ? 0 : formatted.length - 1);
       final endWindow = (baseOff + 240).clamp(baseOff, formatted.length);
       targetText = formatted.substring(baseOff, endWindow);
-    } else if (_pages.isNotEmpty && !_pages[_pageIdx].isPlaceholder) {
-      baseOff = _pages[_pageIdx].startOffset;
-      targetText = _pages[_pageIdx].text;
+    } else if (_pages.isNotEmpty) {
+      final slice = !_pages[_pageIdx].isPlaceholder
+          ? _pages[_pageIdx]
+          : (_isDualSpread &&
+                  _pageIdx + 1 < _pages.length &&
+                  !_pages[_pageIdx + 1].isPlaceholder
+              ? _pages[_pageIdx + 1]
+              : null);
+      if (slice != null) {
+        baseOff = slice.startOffset;
+        targetText = slice.text;
+      }
     }
 
     if (targetText.trim().isEmpty) {
-      _toast('当前页面没有可划线的文本内容');
+      _toast(context.l10n.noHighlightableTextToast);
       return;
     }
 
@@ -1004,15 +1072,20 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
 
   bool _shouldPlaceHighlightBarAtBottom() {
     if (_pages.isEmpty) return true;
-    final slice = _pages[_pageIdx];
-    if (slice.text.isEmpty) return true;
+    final left = _pages[_pageIdx];
+    final right = _isDualSpread && _pageIdx + 1 < _pages.length
+        ? _pages[_pageIdx + 1]
+        : null;
     final targetOffset = _activeSelection?.start ??
         (_inspectedAnnotation != null
             ? ParsedAnnotationLocator.parse(_inspectedAnnotation!.locator)
                 .startOffset
-            : slice.startOffset);
+            : left.startOffset);
+    final targetSlice =
+        (right != null && targetOffset >= right.startOffset) ? right : left;
+    if (targetSlice.text.isEmpty) return true;
     final localRatio =
-        (targetOffset - slice.startOffset) / slice.text.length;
+        (targetOffset - targetSlice.startOffset) / targetSlice.text.length;
     return localRatio < 0.42;
   }
 
@@ -1062,39 +1135,43 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     if (!mounted) return;
     final savedAnn =
         _annotations.where((a) => a.uuid == targetUuid).firstOrNull;
+    final l10n = context.l10n;
     setState(() {
       _selectedHighlightColor = chosenColor;
       _activeSelection = null;
       _inspectedAnnotation = keepInspecting ? savedAnn : null;
     });
-    _toast(cleanNote.isNotEmpty ? '已保存划线与想法' : '已添加划线');
+    _toast(
+      cleanNote.isNotEmpty ? l10n.noteSavedToast : l10n.highlightSavedToast,
+    );
   }
 
   Future<void> _promptNoteForActiveSelection() async {
     final sel = _activeSelection;
     if (sel == null) return;
+    final l10n = context.l10n;
     final noteCtrl = TextEditingController();
     final savedNote = await showInkModal<String>(
       context: context,
-      title: '添加划线想法',
+      title: l10n.addNoteTitle,
       subtitle: '“${sel.text}”',
       disposables: [noteCtrl],
       builder: (ctx) => InkTextField(
         controller: noteCtrl,
         autofocus: true,
-        label: '你的想法',
-        hintText: '写下此刻的批注或感想...',
+        label: l10n.yourNoteLabel,
+        hintText: l10n.yourNoteHint,
         maxLines: 3,
         minLines: 2,
       ),
       actionsBuilder: (ctx) => [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(),
-          child: const Text('取消'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.of(ctx).pop(noteCtrl.text.trim()),
-          child: const Text('保存划线与想法'),
+          child: Text(l10n.saveHighlightNote),
         ),
       ],
     );
@@ -1136,28 +1213,29 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   Future<void> _editInspectedHighlightNote(Annotation ann) async {
+    final l10n = context.l10n;
     final noteCtrl = TextEditingController(text: ann.noteText);
     final updatedNote = await showInkModal<String>(
       context: context,
-      title: '编辑划线想法',
+      title: l10n.editNoteTitle,
       subtitle: ann.excerpt.isNotEmpty ? '“${ann.excerpt}”' : null,
       disposables: [noteCtrl],
       builder: (ctx) => InkTextField(
         controller: noteCtrl,
         autofocus: true,
-        label: '想法内容',
-        hintText: '输入或修改批注（留空则仅保留划线）',
+        label: l10n.yourNoteLabel,
+        hintText: l10n.yourNoteHint,
         maxLines: 3,
         minLines: 2,
       ),
       actionsBuilder: (ctx) => [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(),
-          child: const Text('取消'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.of(ctx).pop(noteCtrl.text.trim()),
-          child: const Text('保存'),
+          child: Text(l10n.save),
         ),
       ],
     );
@@ -1194,30 +1272,54 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   // --- TTS Voice Reading & Sleep Timer ---
 
   Future<void> _stopTtsPlayback({String? message}) async {
-    _ttsSleepTimer?.cancel();
-    _ttsSleepTimer = null;
-    _ttsSleepEndAt = null;
-    _activeTtsUtteranceId = null;
     _ttsExcerptOnly = false;
     _ttsPausedForSettings = false;
-    await _platform.stopTts();
+    await _ttsCtrl.stop();
     if (mounted) {
       setState(() => _ttsPlaying = false);
       if (message != null) _toast(message);
     }
   }
 
-  void _armTtsSleepTimerIfConfigured() {
-    _ttsSleepTimer?.cancel();
-    _ttsSleepTimer = null;
-    _ttsSleepEndAt = null;
-    final mins = ref.read(bookReaderSettingsProvider).ttsSleepTimerMinutes;
-    if (mins > 0) {
-      final dur = Duration(minutes: mins);
-      _ttsSleepEndAt = DateTime.now().add(dur);
-      _ttsSleepTimer = Timer(dur, () {
-        _stopTtsPlayback(message: '定时关闭已到，已停止语音朗读');
-      });
+  void _handleTtsPageCompleted() {
+    if (!mounted || !_ttsPlaying || _ttsPausedForSettings) return;
+    if (_ttsExcerptOnly) {
+      unawaited(_stopTtsPlayback());
+      return;
+    }
+    final curSettings = ref.read(bookReaderSettingsProvider);
+    final ttsCfg = ref.read(ttsConfigProvider);
+    final isScroll =
+        !_isNativePdfBitmapMode && curSettings.pageTurnMode == PageTurnMode.scroll;
+
+    if (ttsCfg.sleepAtChapterEnd) {
+      if (isScroll) {
+        final formatted = BookPaginator.formatParagraphs(
+          _loadedChapter?.text ?? '',
+          indent: curSettings.indentFirstLine,
+        );
+        if (_nextScrollChunkEnd(formatted, _ttsScrollOffset) >=
+            formatted.length) {
+          unawaited(
+            _stopTtsPlayback(message: context.l10n.ttsSleepChapterDoneToast),
+          );
+          return;
+        }
+      } else if (_pageIdx + _pageStep >= _pages.length) {
+        unawaited(
+          _stopTtsPlayback(message: context.l10n.ttsSleepChapterDoneToast),
+        );
+        return;
+      }
+    }
+
+    if (isScroll) {
+      unawaited(_advanceScrollTts(curSettings));
+    } else if (curSettings.ttsAutoTurnPage && _canTurnNext) {
+      _commitTurnNext(fromTtsAutoTurn: true);
+      unawaited(_speakCurrentPage());
+    } else {
+      unawaited(_stopTtsPlayback());
     }
   }
 
@@ -1225,15 +1327,15 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     final wasPlaying = _ttsPlaying;
     if (wasPlaying) {
       _ttsPausedForSettings = true;
-      _activeTtsUtteranceId = null;
-      await _platform.stopTts();
+      await _ttsCtrl.pause();
     }
     if (!mounted) return;
     await context.push('/mine/tts-settings');
     if (!mounted) return;
     _ttsPausedForSettings = false;
     if (wasPlaying && _ttsPlaying) {
-      _armTtsSleepTimerIfConfigured();
+      final settings = ref.read(bookReaderSettingsProvider);
+      _ttsCtrl.armSleepTimer(settings.ttsSleepTimerMinutes);
       if (!_ttsExcerptOnly) {
         await _speakCurrentPage();
       } else {
@@ -1243,49 +1345,50 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   Future<void> _toggleTts() async {
-    if (_ttsPlaying) {
-      await _stopTtsPlayback(message: '已停止语音朗读');
+    if (_ttsPlaying || _ttsCtrl.isActive) {
+      await _stopTtsPlayback(message: context.l10n.ttsStoppedToast);
     } else {
       final settings = ref.read(bookReaderSettingsProvider);
-      if (!_isNativePdfBitmapMode &&
-          settings.pageTurnMode == PageTurnMode.scroll) {
+      final l10n = context.l10n;
+      final isScroll =
+          !_isNativePdfBitmapMode && settings.pageTurnMode == PageTurnMode.scroll;
+      if (isScroll) {
         _ttsScrollOffset = _currentScrollEstimatedOffset();
       }
       setState(() {
         _ttsPlaying = true;
         _ttsExcerptOnly = false;
       });
-      _armTtsSleepTimerIfConfigured();
+      _ttsCtrl.armSleepTimer(settings.ttsSleepTimerMinutes);
       final ok = await _speakCurrentPage();
+      if (!mounted) return;
       if (ok) {
-        _toast('开始 TTS 语音听书');
+        _toast(l10n.ttsStartedToast);
       } else {
-        await _stopTtsPlayback(message: '当前页面无可朗读文本或系统 TTS 未就绪');
+        await _stopTtsPlayback(message: l10n.ttsUnavailableToast);
       }
     }
   }
 
   Future<void> _speakArbitraryText(String rawText) async {
-    final text = rawText.replaceAll('\n', ' ').trim();
-    if (text.isEmpty) return;
+    final chunks = TtsTextChunker.split(rawText.replaceAll('\n', ' ').trim());
+    if (chunks.isEmpty) return;
     final settings = ref.read(bookReaderSettingsProvider);
+    final ttsCfg = ref.read(ttsConfigProvider);
     setState(() {
       _ttsPlaying = true;
       _ttsExcerptOnly = true;
     });
-    _armTtsSleepTimerIfConfigured();
-    final uid = await _platform.speakText(
-      text,
-      rate: settings.ttsRate,
-      pitch: settings.ttsPitch,
-      language: settings.ttsLanguage,
-      engine: settings.ttsEngine.isEmpty ? null : settings.ttsEngine,
+    _ttsCtrl.armSleepTimer(settings.ttsSleepTimerMinutes);
+    final ok = await _ttsCtrl.startChunks(
+      chunks,
+      readerSettings: settings,
+      ttsConfig: ttsCfg,
+      excerptOnly: true,
     );
     if (!mounted) return;
-    if (uid == null) {
-      await _stopTtsPlayback(message: '系统 TTS 未就绪');
-    } else {
-      _activeTtsUtteranceId = uid;
+    if (!ok) {
+      await _stopTtsPlayback(message: context.l10n.ttsUnavailableToast);
     }
   }
 
@@ -1333,9 +1436,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     }
   }
 
-  Future<bool> _speakCurrentPage() async {
-    final settings = ref.read(bookReaderSettingsProvider);
-    String text = '';
+  List<TtsSentenceChunk> _buildCurrentPageChunks(BookReaderSettings settings) {
     final isScroll =
         !_isNativePdfBitmapMode && settings.pageTurnMode == PageTurnMode.scroll;
     if (isScroll) {
@@ -1343,31 +1444,52 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         _loadedChapter?.text ?? '',
         indent: settings.indentFirstLine,
       );
-      if (formatted.isNotEmpty) {
-        final s = _ttsScrollOffset.clamp(0, formatted.length - 1);
-        final e = _nextScrollChunkEnd(formatted, s);
-        text = formatted.substring(s, e).replaceAll('\n', ' ');
+      if (formatted.isEmpty) return const [];
+      final s = _ttsScrollOffset.clamp(0, formatted.length - 1);
+      final e = _nextScrollChunkEnd(formatted, s);
+      return TtsTextChunker.split(formatted.substring(s, e), baseOffset: s);
+    }
+    if (_pages.isNotEmpty) {
+      final chunks = <TtsSentenceChunk>[];
+      final left = _pages[_pageIdx];
+      if (!left.isPlaceholder && left.text.trim().isNotEmpty) {
+        chunks.addAll(
+          TtsTextChunker.split(left.text, baseOffset: left.startOffset),
+        );
       }
-    } else if (_pages.isNotEmpty && !_pages[_pageIdx].isPlaceholder) {
-      text = _pages[_pageIdx].text.replaceAll('\n', ' ');
-    } else {
-      text = (_loadedChapter?.text.replaceAll('\n', ' ') ?? '');
+      if (_isDualSpread && _pageIdx + 1 < _pages.length) {
+        final right = _pages[_pageIdx + 1];
+        if (!right.isPlaceholder && right.text.trim().isNotEmpty) {
+          final rawRight =
+              TtsTextChunker.split(right.text, baseOffset: right.startOffset);
+          for (final c in rawRight) {
+            chunks.add(
+              TtsSentenceChunk(
+                index: chunks.length,
+                startOffset: c.startOffset,
+                endOffset: c.endOffset,
+                text: c.text,
+              ),
+            );
+          }
+        }
+      }
+      return chunks;
     }
-    if (text.trim().isEmpty) return false;
-    final uid = await _platform.speakText(
-      text,
-      rate: settings.ttsRate,
-      pitch: settings.ttsPitch,
-      language: settings.ttsLanguage,
-      engine: settings.ttsEngine.isEmpty ? null : settings.ttsEngine,
+    final raw = _loadedChapter?.text ?? '';
+    return TtsTextChunker.split(raw);
+  }
+
+  Future<bool> _speakCurrentPage() async {
+    final settings = ref.read(bookReaderSettingsProvider);
+    final ttsCfg = ref.read(ttsConfigProvider);
+    final chunks = _buildCurrentPageChunks(settings);
+    if (chunks.isEmpty) return false;
+    return _ttsCtrl.startChunks(
+      chunks,
+      readerSettings: settings,
+      ttsConfig: ttsCfg,
     );
-    if (!mounted) return false;
-    if (uid == null) {
-      _activeTtsUtteranceId = null;
-      return false;
-    }
-    _activeTtsUtteranceId = uid;
-    return true;
   }
 
   void _toggleAutoScroll() {
@@ -1393,7 +1515,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           } else {
             _autoScrollTimer?.cancel();
             setState(() => _autoScrolling = false);
-            _toast('已自动滚屏至全书末尾');
+            _toast(context.l10n.autoScrollReachedEnd);
           }
         } else {
           _scrollCtrl.jumpTo(next);
@@ -1405,16 +1527,17 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   Future<void> _exportNotesMarkdown() async {
     final book = _book;
     if (book == null) return;
+    final l10n = context.l10n;
     final notes = await _db.getAnnotationsFor(book.contentHash);
     final buf = StringBuffer()
-      ..writeln('# ${book.title} — 墨匣阅读笔记')
-      ..writeln('> 作者：${book.author}\n');
+      ..writeln('# ${book.title}')
+      ..writeln('> ${localizedAuthor(l10n, book.author)}\n');
     for (final n in notes) {
-      buf.writeln('- **第 ${n.chapterIndex + 1} 章**：${n.excerpt}');
-      if (n.noteText.isNotEmpty) buf.writeln('  - 想法：${n.noteText}');
+      buf.writeln('- **${l10n.chapterLabelShort(n.chapterIndex + 1)}**：${n.excerpt}');
+      if (n.noteText.isNotEmpty) buf.writeln('  - ${l10n.notePrefix(n.noteText)}');
     }
     await Clipboard.setData(ClipboardData(text: buf.toString()));
-    _toast('已复制 ${notes.length} 条 Markdown 笔记到剪贴板');
+    _toast(l10n.exportNotesSuccess(notes.length));
   }
 
   void _toast(String msg) {
@@ -1447,7 +1570,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     int? chapterIndexOverride,
     String? chapterTitleOverride,
     bool interactive = false,
+    GlobalKey<ReaderHighlightCanvasState>? canvasKey,
+    bool embeddedColumn = false,
   }) {
+    final l10n = context.l10n;
     final paper = settings.paperTheme;
     final isDarkPaper = paper.background.computeLuminance() < 0.25;
     final chIdx = chapterIndexOverride ?? _chapterIdx;
@@ -1474,49 +1600,48 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       pageIndex: slice.pageIndex,
     ).isNotEmpty;
 
-    return ColoredBox(
-      color: paper.background,
-      child: SafeArea(
-        child: Padding(
-          padding: EdgeInsets.symmetric(
-            horizontal: settings.horizontalPadding,
-            vertical: 12,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Expanded(
-                    child: Text(
-                      chapterTitle,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(fontSize: 11, color: paper.secondary),
-                    ),
-                  ),
-                  if (_ttsPlaying && interactive)
-                    Padding(
-                      padding: const EdgeInsets.only(right: 6),
-                      child: InkIconWidget(
-                        InkIcon.tts,
-                        size: 13,
-                        color: accentColor,
-                      ),
-                    ),
-                  if (pageHasBookmark)
-                    InkIconWidget(
-                      InkIcon.bookmarkFilled,
-                      size: 14,
-                      color: accentColor,
-                    ),
-                ],
+    final colWidget = Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Expanded(
+              child: Text(
+                chapterTitle,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(fontSize: 11, color: paper.secondary),
               ),
-              const SizedBox(height: 14),
-              Expanded(
-                child: ReaderHighlightCanvas(
-                  key: interactive ? _activeCanvasKey : null,
+            ),
+            if (_ttsPlaying && interactive)
+              Padding(
+                padding: const EdgeInsets.only(right: 6),
+                child: InkIconWidget(
+                  InkIcon.tts,
+                  size: 13,
+                  color: accentColor,
+                ),
+              ),
+            if (pageHasBookmark)
+              InkIconWidget(
+                InkIcon.bookmarkFilled,
+                size: 14,
+                color: accentColor,
+              ),
+          ],
+        ),
+        const SizedBox(height: 14),
+        Expanded(
+          child: slice.isPlaceholder
+              ? Center(
+                  child: Text(
+                    l10n.emptyChapterPlaceholder,
+                    style: TextStyle(fontSize: 14, color: paper.secondary),
+                  ),
+                )
+              : ReaderHighlightCanvas(
+                  key: canvasKey,
                   text: slice.text,
                   baseOffset: slice.startOffset,
                   style: TextStyle(
@@ -1524,6 +1649,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     height: settings.lineHeight,
                     color: paper.foreground,
                   ),
+                  paragraphSpacing: settings.paragraphSpacing,
                   isDarkPaper: isDarkPaper,
                   accentColor: accentColor,
                   selectedColorHex: _selectedHighlightColor,
@@ -1534,33 +1660,185 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                           end: _activeSelection!.end,
                         )
                       : null,
+                  ttsHighlightGlobal:
+                      interactive ? _ttsCtrl.activeHighlightRange : null,
                   interactive: interactive && !slice.isPlaceholder,
-                  onSelectionChanged:
-                      interactive ? _activateSelection : null,
+                  onSelectionChanged: interactive ? _activateSelection : null,
                   onHighlightTapped:
                       interactive ? _activateHighlightInspector : null,
                   onDismissSelection: interactive
                       ? () => setState(() => _activeSelection = null)
                       : null,
                 ),
+        ),
+        const SizedBox(height: 8),
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Text(
+              '${overallPct.toStringAsFixed(1)}% · ${slice.pageIndex + 1}/$safeTotal',
+              style: TextStyle(
+                fontSize: 11,
+                color: paper.secondary,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
-              const SizedBox(height: 8),
-              Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    '${overallPct.toStringAsFixed(1)}% · ${slice.pageIndex + 1}/$safeTotal',
-                    style: TextStyle(
-                      fontSize: 11,
-                      color: paper.secondary,
-                      fontFeatures: const [FontFeature.tabularFigures()],
+            ),
+            Text(
+              _book?.format ?? 'EPUB',
+              style: TextStyle(fontSize: 11, color: paper.secondary),
+            ),
+          ],
+        ),
+      ],
+    );
+
+    if (embeddedColumn) return colWidget;
+
+    return ColoredBox(
+      color: paper.background,
+      child: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: kMaxSingleReaderWidth),
+            child: Padding(
+              padding: EdgeInsets.symmetric(
+                horizontal: settings.horizontalPadding,
+                vertical: 12,
+              ),
+              child: colWidget,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSpreadOrSingleWidget({
+    required int startPageIdx,
+    required BookReaderSettings settings,
+    required List<BookPageSlice> chapterPages,
+    required List<Annotation> allAnnotations,
+    required Color accentColor,
+    required bool dual,
+    int? chapterIndexOverride,
+    String? chapterTitleOverride,
+    bool interactive = false,
+  }) {
+    if (chapterPages.isEmpty) {
+      return ColoredBox(color: settings.paperTheme.background);
+    }
+    final clampedIdx = startPageIdx.clamp(0, chapterPages.length - 1);
+    if (!dual) {
+      return _buildPageWidget(
+        chapterPages[clampedIdx],
+        settings,
+        chapterPages.length,
+        allAnnotations,
+        chapterPages: chapterPages,
+        accentColor: accentColor,
+        chapterIndexOverride: chapterIndexOverride,
+        chapterTitleOverride: chapterTitleOverride,
+        interactive: interactive,
+        canvasKey: interactive ? _leftCanvasKey : null,
+      );
+    }
+
+    final paper = settings.paperTheme;
+    final isDarkPaper = paper.background.computeLuminance() < 0.25;
+    final leftSlice = chapterPages[clampedIdx];
+    final rightSlice = clampedIdx + 1 < chapterPages.length
+        ? chapterPages[clampedIdx + 1]
+        : null;
+    final outerH = settings.horizontalPadding.clamp(16.0, 32.0);
+    final chIdx = chapterIndexOverride ?? _chapterIdx;
+    final nextChapterTitle = chIdx + 1 < _chapters.length
+        ? _chapters[chIdx + 1].title
+        : null;
+
+    return ColoredBox(
+      color: paper.background,
+      child: SafeArea(
+        child: Padding(
+          padding: EdgeInsets.symmetric(horizontal: outerH, vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _buildPageWidget(
+                  leftSlice,
+                  settings,
+                  chapterPages.length,
+                  allAnnotations,
+                  chapterPages: chapterPages,
+                  accentColor: accentColor,
+                  chapterIndexOverride: chapterIndexOverride,
+                  chapterTitleOverride: chapterTitleOverride,
+                  interactive: interactive,
+                  canvasKey: interactive ? _leftCanvasKey : null,
+                  embeddedColumn: true,
+                ),
+              ),
+              SizedBox(
+                width: 44,
+                child: Center(
+                  child: Container(
+                    width: 14,
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.transparent,
+                          (isDarkPaper ? Colors.white : Colors.black)
+                              .withValues(alpha: isDarkPaper ? 0.08 : 0.06),
+                          Colors.transparent,
+                        ],
+                      ),
                     ),
                   ),
-                  Text(
-                    _book?.format ?? 'EPUB',
-                    style: TextStyle(fontSize: 11, color: paper.secondary),
-                  ),
-                ],
+                ),
+              ),
+              Expanded(
+                child: rightSlice != null
+                    ? _buildPageWidget(
+                        rightSlice,
+                        settings,
+                        chapterPages.length,
+                        allAnnotations,
+                        chapterPages: chapterPages,
+                        accentColor: accentColor,
+                        chapterIndexOverride: chapterIndexOverride,
+                        chapterTitleOverride: chapterTitleOverride,
+                        interactive: interactive,
+                        canvasKey: interactive ? _rightCanvasKey : null,
+                        embeddedColumn: true,
+                      )
+                    : Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text(
+                              context.l10n.endOfChapterHint,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: paper.secondary,
+                              ),
+                            ),
+                            if (nextChapterTitle != null) ...[
+                              const SizedBox(height: 6),
+                              Text(
+                                context.l10n.nextChapterHint(nextChapterTitle),
+                                textAlign: TextAlign.center,
+                                maxLines: 2,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  color: paper.secondary.withValues(alpha: 0.8),
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
               ),
             ],
           ),
@@ -1613,10 +1891,15 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     final settings = ref.watch(bookReaderSettingsProvider);
     final settingsCtrl = ref.read(bookReaderSettingsProvider.notifier);
+    final ttsCfg = ref.watch(ttsConfigProvider);
     final tokens = InkBoxTokens.of(context);
     final paper = settings.paperTheme;
+    if (paper != BookPaperTheme.dark && paper != BookPaperTheme.oled) {
+      _lastLightPaper = paper;
+    }
     final isDarkPaper = paper.background.computeLuminance() < 0.25;
     final safePadding = MediaQuery.paddingOf(context);
     final isRealPdf = _book != null &&
@@ -1637,7 +1920,13 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
               !(isRealPdf && !settings.pdfReflowMode) &&
               settings.pageTurnMode != PageTurnMode.scroll) {
             _ensurePaginated(outerConstraints.biggest, safePadding, settings);
+          } else {
+            _isDualSpread = false;
           }
+
+          final dual = _isDualSpread;
+          final step = _pageStep;
+          final wideScreen = outerConstraints.maxWidth > 720;
 
           final currentPageBookmarked = !_loading &&
               _bookmarksForPage(
@@ -1689,154 +1978,175 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     );
                   },
                   child: SafeArea(
-                    child: Column(
-                      children: [
-                        Padding(
-                          padding: EdgeInsets.fromLTRB(
-                            settings.horizontalPadding,
-                            10,
-                            settings.horizontalPadding,
-                            4,
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  _loadedChapter?.title ?? '',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11,
-                                    color: paper.secondary,
-                                  ),
-                                ),
-                              ),
-                              if (currentPageBookmarked)
-                                Padding(
-                                  padding: const EdgeInsets.only(right: 6),
-                                  child: InkIconWidget(
-                                    InkIcon.bookmarkFilled,
-                                    size: 13,
-                                    color: tokens.accentPrimary,
-                                  ),
-                                ),
-                              Text(
-                                '第 ${_chapterIdx + 1}/${_chapters.isEmpty ? 1 : _chapters.length} 章 · 滚动',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: paper.secondary,
-                                  fontFeatures: const [
-                                    FontFeature.tabularFigures(),
-                                  ],
-                                ),
-                              ),
-                            ],
-                          ),
+                    child: Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(
+                          maxWidth: kMaxSingleReaderWidth,
                         ),
-                        Expanded(
-                          child: ListView(
-                            controller: _scrollCtrl,
-                            physics: _activeSelection != null
-                                ? const NeverScrollableScrollPhysics()
-                                : const AlwaysScrollableScrollPhysics(),
-                            padding: EdgeInsets.symmetric(
-                              horizontal: settings.horizontalPadding,
-                              vertical: 14,
-                            ),
-                            children: [
-                              Text(
-                                _loadedChapter?.title ?? '',
-                                style: TextStyle(
-                                  fontSize: settings.fontSize + 4,
-                                  fontWeight: FontWeight.w700,
-                                  color: paper.foreground,
-                                ),
+                        child: Column(
+                          children: [
+                            Padding(
+                              padding: EdgeInsets.fromLTRB(
+                                settings.horizontalPadding,
+                                10,
+                                settings.horizontalPadding,
+                                4,
                               ),
-                              const SizedBox(height: 18),
-                              ReaderHighlightCanvas(
-                                key: _activeCanvasKey,
-                                text: BookPaginator.formatParagraphs(
-                                  _loadedChapter?.text ?? '',
-                                  indent: settings.indentFirstLine,
-                                ),
-                                baseOffset: 0,
-                                style: TextStyle(
-                                  fontSize: settings.fontSize,
-                                  height: settings.lineHeight,
-                                  color: paper.foreground,
-                                ),
-                                isDarkPaper: isDarkPaper,
-                                accentColor: tokens.accentPrimary,
-                                selectedColorHex: _selectedHighlightColor,
-                                chapterHighlights: scrollChapterHighlights,
-                                activeSelectionGlobal: _activeSelection != null
-                                    ? (
-                                        start: _activeSelection!.start,
-                                        end: _activeSelection!.end,
-                                      )
-                                    : null,
-                                interactive: (_loadedChapter?.text.trim().isNotEmpty ?? false),
-                                onSelectionChanged: _activateSelection,
-                                onHighlightTapped: _activateHighlightInspector,
-                                onDismissSelection: () =>
-                                    setState(() => _activeSelection = null),
-                              ),
-                              const SizedBox(height: 32),
-                              Row(
+                              child: Row(
                                 mainAxisAlignment:
                                     MainAxisAlignment.spaceBetween,
                                 children: [
-                                  if (_chapterIdx > 0)
-                                    OutlinedButton(
-                                      onPressed: () =>
-                                          _loadChapter(_chapterIdx - 1),
-                                      child: const Text('上一章'),
-                                    )
-                                  else
-                                    const SizedBox.shrink(),
-                                  if (_chapterIdx + 1 < _chapters.length)
-                                    FilledButton(
-                                      onPressed: () =>
-                                          _loadChapter(_chapterIdx + 1),
-                                      child: const Text('下一章'),
+                                  Expanded(
+                                    child: Text(
+                                      _loadedChapter?.title ?? '',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11,
+                                        color: paper.secondary,
+                                      ),
                                     ),
+                                  ),
+                                  if (currentPageBookmarked)
+                                    Padding(
+                                      padding: const EdgeInsets.only(right: 6),
+                                      child: InkIconWidget(
+                                        InkIcon.bookmarkFilled,
+                                        size: 13,
+                                        color: tokens.accentPrimary,
+                                      ),
+                                    ),
+                                  Text(
+                                    l10n.scrollModeLabel(
+                                      _chapterIdx + 1,
+                                      _chapters.isEmpty ? 1 : _chapters.length,
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      color: paper.secondary,
+                                      fontFeatures: const [
+                                        FontFeature.tabularFigures(),
+                                      ],
+                                    ),
+                                  ),
                                 ],
                               ),
-                              const SizedBox(height: 24),
-                            ],
-                          ),
+                            ),
+                            Expanded(
+                              child: ListView(
+                                controller: _scrollCtrl,
+                                physics: _activeSelection != null
+                                    ? const NeverScrollableScrollPhysics()
+                                    : const AlwaysScrollableScrollPhysics(),
+                                padding: EdgeInsets.symmetric(
+                                  horizontal: settings.horizontalPadding,
+                                  vertical: 14,
+                                ),
+                                children: [
+                                  Text(
+                                    _loadedChapter?.title ?? '',
+                                    style: TextStyle(
+                                      fontSize: settings.fontSize + 4,
+                                      fontWeight: FontWeight.w700,
+                                      color: paper.foreground,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 18),
+                                  ReaderHighlightCanvas(
+                                    key: _leftCanvasKey,
+                                    text: BookPaginator.formatParagraphs(
+                                      _loadedChapter?.text ?? '',
+                                      indent: settings.indentFirstLine,
+                                    ),
+                                    baseOffset: 0,
+                                    style: TextStyle(
+                                      fontSize: settings.fontSize,
+                                      height: settings.lineHeight,
+                                      color: paper.foreground,
+                                    ),
+                                    paragraphSpacing: settings.paragraphSpacing,
+                                    isDarkPaper: isDarkPaper,
+                                    accentColor: tokens.accentPrimary,
+                                    selectedColorHex: _selectedHighlightColor,
+                                    chapterHighlights: scrollChapterHighlights,
+                                    activeSelectionGlobal:
+                                        _activeSelection != null
+                                            ? (
+                                                start: _activeSelection!.start,
+                                                end: _activeSelection!.end,
+                                              )
+                                            : null,
+                                    ttsHighlightGlobal:
+                                        _ttsCtrl.activeHighlightRange,
+                                    interactive: (_loadedChapter?.text
+                                            .trim()
+                                            .isNotEmpty ??
+                                        false),
+                                    onSelectionChanged: _activateSelection,
+                                    onHighlightTapped:
+                                        _activateHighlightInspector,
+                                    onDismissSelection: () =>
+                                        setState(() => _activeSelection = null),
+                                  ),
+                                  const SizedBox(height: 32),
+                                  Row(
+                                    mainAxisAlignment:
+                                        MainAxisAlignment.spaceBetween,
+                                    children: [
+                                      if (_chapterIdx > 0)
+                                        OutlinedButton(
+                                          onPressed: () =>
+                                              _loadChapter(_chapterIdx - 1),
+                                          child: Text(l10n.prevChapter),
+                                        )
+                                      else
+                                        const SizedBox.shrink(),
+                                      if (_chapterIdx + 1 < _chapters.length)
+                                        FilledButton(
+                                          onPressed: () =>
+                                              _loadChapter(_chapterIdx + 1),
+                                          child: Text(l10n.nextChapter),
+                                        ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 24),
+                                ],
+                              ),
+                            ),
+                          ],
                         ),
-                      ],
+                      ),
                     ),
                   ),
                 )
               else if (_pages.isNotEmpty)
                 Builder(
                   builder: (context) {
-                    final cur = _pages[_pageIdx];
-
                     Widget? prev;
                     if (_pageIdx > 0) {
-                      prev = _buildPageWidget(
-                        _pages[_pageIdx - 1],
-                        settings,
-                        _pages.length,
-                        annotations,
+                      final prevStart =
+                          dual ? ((_pageIdx - step) ~/ 2) * 2 : _pageIdx - 1;
+                      prev = _buildSpreadOrSingleWidget(
+                        startPageIdx: prevStart.clamp(0, _pages.length - 1),
+                        settings: settings,
                         chapterPages: _pages,
+                        allAnnotations: annotations,
                         accentColor: tokens.accentPrimary,
+                        dual: dual,
                       );
                     } else if (_chapterIdx > 0) {
                       if (_prevChapter != null &&
                           _prevChapter!.index == _chapterIdx - 1 &&
                           _prevChapterPages.isNotEmpty) {
-                        prev = _buildPageWidget(
-                          _prevChapterPages.last,
-                          settings,
-                          _prevChapterPages.length,
-                          annotations,
+                        final rawLast = _prevChapterPages.length - 1;
+                        final prevLastStart = dual ? (rawLast ~/ 2) * 2 : rawLast;
+                        prev = _buildSpreadOrSingleWidget(
+                          startPageIdx: prevLastStart,
+                          settings: settings,
                           chapterPages: _prevChapterPages,
+                          allAnnotations: annotations,
                           accentColor: tokens.accentPrimary,
+                          dual: dual,
                           chapterIndexOverride: _chapterIdx - 1,
                           chapterTitleOverride: _prevChapter!.title,
                         );
@@ -1849,26 +2159,28 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     }
 
                     Widget? next;
-                    if (_pageIdx + 1 < _pages.length) {
-                      next = _buildPageWidget(
-                        _pages[_pageIdx + 1],
-                        settings,
-                        _pages.length,
-                        annotations,
+                    if (_pageIdx + step < _pages.length) {
+                      final nextStart =
+                          dual ? ((_pageIdx + step) ~/ 2) * 2 : _pageIdx + 1;
+                      next = _buildSpreadOrSingleWidget(
+                        startPageIdx: nextStart,
+                        settings: settings,
                         chapterPages: _pages,
+                        allAnnotations: annotations,
                         accentColor: tokens.accentPrimary,
+                        dual: dual,
                       );
                     } else if (_chapterIdx + 1 < _chapters.length) {
                       if (_nextChapter != null &&
                           _nextChapter!.index == _chapterIdx + 1 &&
                           _nextChapterPages.isNotEmpty) {
-                        next = _buildPageWidget(
-                          _nextChapterPages.first,
-                          settings,
-                          _nextChapterPages.length,
-                          annotations,
+                        next = _buildSpreadOrSingleWidget(
+                          startPageIdx: 0,
+                          settings: settings,
                           chapterPages: _nextChapterPages,
+                          allAnnotations: annotations,
                           accentColor: tokens.accentPrimary,
+                          dual: dual,
                           chapterIndexOverride: _chapterIdx + 1,
                           chapterTitleOverride: _nextChapter!.title,
                         );
@@ -1883,13 +2195,14 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     return PageTurnStage(
                       controller: _pageTurnCtrl,
                       mode: settings.pageTurnMode,
-                      currentPage: _buildPageWidget(
-                        cur,
-                        settings,
-                        _pages.length,
-                        annotations,
+                      isDualSpread: dual,
+                      currentPage: _buildSpreadOrSingleWidget(
+                        startPageIdx: _pageIdx,
+                        settings: settings,
                         chapterPages: _pages,
+                        allAnnotations: annotations,
                         accentColor: tokens.accentPrimary,
+                        dual: dual,
                         interactive: true,
                       ),
                       previousPage: prev,
@@ -1901,15 +2214,100 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                       onInterceptTap: _tryInterceptCanvasTap,
                       onTurnNext: _commitTurnNext,
                       onTurnPrev: _commitTurnPrev,
-                      onBoundaryReached: (isEnd) =>
-                          _toast(isEnd ? '已是最后一页' : '已是第一页'),
+                      onBoundaryReached: (isEnd) => _toast(
+                        isEnd ? l10n.lastPageToast : l10n.firstPageToast,
+                      ),
                       onTapNormalized: _handleTapNormalized,
                     );
                   },
                 ),
 
-              // Floating Interactive Highlight / Underline Bar (`划线` & `查看/删除已划线`)
-              // Adaptively positioned at bottom when selecting upper text and at top when selecting lower text.
+              // Reader brightness dimming veil (edge-swipe adjustable)
+              if (_readerBrightness < 0.995)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: ColoredBox(
+                      color: Colors.black.withValues(
+                        alpha: (1.0 - _readerBrightness).clamp(0.0, 0.75),
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Left-edge vertical brightness gesture strip
+              if (settings.edgeBrightnessGesture &&
+                  !_loading &&
+                  !_menuVisible &&
+                  _activeSelection == null &&
+                  _inspectedAnnotation == null)
+                Positioned(
+                  left: 0,
+                  top: safePadding.top + 40,
+                  bottom: safePadding.bottom + 40,
+                  width: 36,
+                  child: GestureDetector(
+                    behavior: HitTestBehavior.translucent,
+                    onVerticalDragUpdate: (d) {
+                      _brightnessHideTimer?.cancel();
+                      setState(() {
+                        _readerBrightness =
+                            (_readerBrightness - d.delta.dy / 300.0)
+                                .clamp(0.25, 1.0);
+                        _showBrightnessIndicator = true;
+                      });
+                    },
+                    onVerticalDragEnd: (_) {
+                      _brightnessHideTimer?.cancel();
+                      _brightnessHideTimer = Timer(
+                        const Duration(milliseconds: 1400),
+                        () {
+                          if (mounted) {
+                            setState(() => _showBrightnessIndicator = false);
+                          }
+                        },
+                      );
+                    },
+                  ),
+                ),
+
+              if (_showBrightnessIndicator)
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: Center(
+                      child: FloatingCard(
+                        frosted: true,
+                        radius: 999,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 16,
+                          vertical: 9,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            InkIconWidget(
+                              InkIcon.brightness,
+                              size: 16,
+                              color: tokens.accentPrimary,
+                            ),
+                            const SizedBox(width: 8),
+                            Text(
+                              l10n.brightnessIndicator(
+                                (_readerBrightness * 100).round(),
+                              ),
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                fontWeight: FontWeight.w600,
+                                color: tokens.inkPrimary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+
+              // Floating Interactive Highlight / Underline Bar
               if ((_activeSelection != null || _inspectedAnnotation != null) &&
                   !_menuVisible)
                 Positioned(
@@ -1921,7 +2319,13 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   bottom: _shouldPlaceHighlightBarAtBottom()
                       ? safePadding.bottom + 16
                       : null,
-                  child: _buildHighlightFloatingBar(tokens),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints:
+                          const BoxConstraints(maxWidth: kMaxModalWidth),
+                      child: _buildHighlightFloatingBar(tokens),
+                    ),
+                  ),
                 ),
 
               // Floating TTS Mini Dock
@@ -1933,65 +2337,128 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   left: 16,
                   right: 16,
                   bottom: safePadding.bottom + 18,
-                  child: FloatingCard(
-                    frosted: true,
-                    radius: 999,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    child: Row(
-                      children: [
-                        InkIconWidget(
-                          InkIcon.tts,
-                          size: 18,
-                          color: tokens.accentPrimary,
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 480),
+                      child: FloatingCard(
+                        frosted: true,
+                        radius: 999,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'TTS 朗读中 · ${settings.ttsRate.toStringAsFixed(1)}x${_ttsSleepEndAt != null ? " · 定时" : ""}',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                            style: TextStyle(
-                              fontSize: 12,
-                              fontWeight: FontWeight.w600,
-                              color: tokens.inkPrimary,
+                        child: Row(
+                          children: [
+                            InkIconWidget(
+                              InkIcon.tts,
+                              size: 17,
+                              color: tokens.accentPrimary,
                             ),
-                          ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: Column(
+                                mainAxisSize: MainAxisSize.min,
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    l10n.ttsPlayingStatus(
+                                      ttsCfg.mode == TtsEngineMode.online &&
+                                              !_ttsCtrl.usingFallbackLocal
+                                          ? ttsCfg.activeProfile.name
+                                          : l10n.ttsModeLocal,
+                                      settings.ttsRate.toStringAsFixed(1),
+                                    ),
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w600,
+                                      color: tokens.inkPrimary,
+                                    ),
+                                  ),
+                                  if (_ttsCtrl.remainingSleepLabel != null)
+                                    Text(
+                                      _ttsCtrl.remainingSleepLabel!,
+                                      style: TextStyle(
+                                        fontSize: 10.5,
+                                        color: tokens.inkMuted,
+                                        fontFeatures: const [
+                                          FontFeature.tabularFigures(),
+                                        ],
+                                      ),
+                                    ),
+                                ],
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: l10n.ttsPrevSentence,
+                              onPressed: () => unawaited(_ttsCtrl.prevSentence()),
+                              icon: InkIconWidget(
+                                InkIcon.skipPrev,
+                                size: 16,
+                                color: tokens.inkPrimary,
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: _ttsCtrl.isPaused
+                                  ? l10n.ttsResume
+                                  : l10n.ttsPause,
+                              onPressed: () => unawaited(
+                                _ttsCtrl.isPaused
+                                    ? _ttsCtrl.resume()
+                                    : _ttsCtrl.pause(),
+                              ),
+                              icon: InkIconWidget(
+                                _ttsCtrl.isPaused
+                                    ? InkIcon.play
+                                    : InkIcon.pause,
+                                size: 17,
+                                color: tokens.accentPrimary,
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: l10n.ttsNextSentence,
+                              onPressed: () => unawaited(_ttsCtrl.nextSentence()),
+                              icon: InkIconWidget(
+                                InkIcon.skipNext,
+                                size: 16,
+                                color: tokens.inkPrimary,
+                              ),
+                            ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: l10n.ttsSettingsBtn,
+                              onPressed: _openTtsSettingsFromReader,
+                              icon: InkIconWidget(
+                                InkIcon.gear,
+                                size: 16,
+                                color: tokens.inkPrimary,
+                              ),
+                            ),
+                            TextButton(
+                              style: TextButton.styleFrom(
+                                visualDensity: VisualDensity.compact,
+                                minimumSize: Size.zero,
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 8,
+                                  vertical: 6,
+                                ),
+                              ),
+                              onPressed: _toggleTts,
+                              child: Text(
+                                l10n.ttsStop,
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: tokens.accentWarm,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          onPressed: () {
-                            final nextRate = settings.ttsRate >= 2.0
-                                ? 0.8
-                                : double.parse(
-                                    (settings.ttsRate + 0.2).toStringAsFixed(1),
-                                  );
-                            settingsCtrl
-                                .update((s) => s.copyWith(ttsRate: nextRate));
-                            _speakCurrentPage();
-                          },
-                          child: const Text('语速'),
-                        ),
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          onPressed: _openTtsSettingsFromReader,
-                          child: const Text('设置'),
-                        ),
-                        TextButton(
-                          style: TextButton.styleFrom(
-                            visualDensity: VisualDensity.compact,
-                          ),
-                          onPressed: _toggleTts,
-                          child: Text(
-                            '停止',
-                            style: TextStyle(color: tokens.accentWarm),
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -2002,107 +2469,120 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   top: safePadding.top + 8,
                   left: 12,
                   right: 12,
-                  child: FloatingCard(
-                    frosted: true,
-                    radius: 20,
-                    padding:
-                        const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                    child: Row(
-                      children: [
-                        InkCircleButton(
-                          icon: InkIconWidget(
-                            InkIcon.back,
-                            size: 18,
-                            color: tokens.inkPrimary,
-                          ),
-                          onPressed: () => context.pop(),
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: wideScreen ? 680 : double.infinity,
+                      ),
+                      child: FloatingCard(
+                        frosted: true,
+                        radius: 20,
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 6,
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: GestureDetector(
-                            onTap: _openBookDetailFromReader,
-                            child: Text(
-                              _book?.title ?? '书籍阅读',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 14,
-                                fontWeight: FontWeight.w700,
+                        child: Row(
+                          children: [
+                            InkCircleButton(
+                              icon: InkIconWidget(
+                                InkIcon.back,
+                                size: 18,
+                                color: tokens.inkPrimary,
+                              ),
+                              onPressed: () => context.pop(),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: GestureDetector(
+                                onTap: _openBookDetailFromReader,
+                                child: Text(
+                                  _book?.title ?? l10n.bookDetailsTitle,
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w700,
+                                    color: tokens.inkPrimary,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            if (isRealPdf)
+                              TextButton(
+                                onPressed: () => settingsCtrl.update(
+                                  (s) => s.copyWith(
+                                      pdfReflowMode: !s.pdfReflowMode),
+                                ),
+                                child: Text(
+                                  settings.pdfReflowMode
+                                      ? l10n.originalPdf
+                                      : l10n.textReflow,
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: tokens.accentPrimary,
+                                  ),
+                                ),
+                              ),
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: l10n.highlightNotesTooltip,
+                              onPressed: _startToolbarHighlightSelection,
+                              icon: InkIconWidget(
+                                InkIcon.highlight,
+                                size: 18,
                                 color: tokens.inkPrimary,
                               ),
                             ),
-                          ),
-                        ),
-                        if (isRealPdf)
-                          TextButton(
-                            onPressed: () => settingsCtrl.update(
-                              (s) => s.copyWith(
-                                  pdfReflowMode: !s.pdfReflowMode),
-                            ),
-                            child: Text(
-                              settings.pdfReflowMode ? '原版PDF' : '文本重排',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                color: tokens.accentPrimary,
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: currentPageBookmarked
+                                  ? l10n.removeBookmarkTooltip
+                                  : l10n.addBookmarkTooltip,
+                              onPressed: _togglePageBookmark,
+                              icon: Container(
+                                padding: const EdgeInsets.all(5),
+                                decoration: BoxDecoration(
+                                  color: currentPageBookmarked
+                                      ? tokens.accentSoft
+                                      : Colors.transparent,
+                                  shape: BoxShape.circle,
+                                ),
+                                child: InkIconWidget(
+                                  currentPageBookmarked
+                                      ? InkIcon.bookmarkFilled
+                                      : InkIcon.bookmark,
+                                  size: 17,
+                                  color: currentPageBookmarked
+                                      ? tokens.accentPrimary
+                                      : tokens.inkPrimary,
+                                ),
                               ),
                             ),
-                          ),
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          tooltip: '划线笔记',
-                          onPressed: _startToolbarHighlightSelection,
-                          icon: InkIconWidget(
-                            InkIcon.highlight,
-                            size: 18,
-                            color: tokens.inkPrimary,
-                          ),
-                        ),
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          tooltip: currentPageBookmarked ? '取消书签' : '添加书签',
-                          onPressed: _togglePageBookmark,
-                          icon: Container(
-                            padding: const EdgeInsets.all(5),
-                            decoration: BoxDecoration(
-                              color: currentPageBookmarked
-                                  ? tokens.accentSoft
-                                  : Colors.transparent,
-                              shape: BoxShape.circle,
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: l10n.ttsListenTooltip,
+                              onPressed: _toggleTts,
+                              icon: InkIconWidget(
+                                InkIcon.tts,
+                                size: 18,
+                                color: _ttsPlaying
+                                    ? tokens.accentPrimary
+                                    : tokens.inkPrimary,
+                              ),
                             ),
-                            child: InkIconWidget(
-                              currentPageBookmarked
-                                  ? InkIcon.bookmarkFilled
-                                  : InkIcon.bookmark,
-                              size: 17,
-                              color: currentPageBookmarked
-                                  ? tokens.accentPrimary
-                                  : tokens.inkPrimary,
+                            IconButton(
+                              visualDensity: VisualDensity.compact,
+                              tooltip: l10n.bookDetailsTitle,
+                              onPressed: _openBookDetailFromReader,
+                              icon: InkIconWidget(
+                                InkIcon.more,
+                                size: 18,
+                                color: tokens.inkPrimary,
+                              ),
                             ),
-                          ),
+                          ],
                         ),
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          tooltip: 'TTS 听书',
-                          onPressed: _toggleTts,
-                          icon: InkIconWidget(
-                            InkIcon.tts,
-                            size: 18,
-                            color: _ttsPlaying
-                                ? tokens.accentPrimary
-                                : tokens.inkPrimary,
-                          ),
-                        ),
-                        IconButton(
-                          visualDensity: VisualDensity.compact,
-                          tooltip: '书籍详情',
-                          onPressed: _openBookDetailFromReader,
-                          icon: InkIconWidget(
-                            InkIcon.more,
-                            size: 18,
-                            color: tokens.inkPrimary,
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -2113,142 +2593,166 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   left: 12,
                   right: 12,
                   bottom: safePadding.bottom + 12,
-                  child: FloatingCard(
-                    frosted: true,
-                    radius: 26,
-                    padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        if (_scrubChapterIdx != null && _chapters.isNotEmpty)
-                          Padding(
-                            padding: const EdgeInsets.only(bottom: 4),
-                            child: Text(
-                              '${_chapters[_scrubChapterIdx!.clamp(0, _chapters.length - 1)].title} (${_scrubChapterIdx! + 1}/${_chapters.length})',
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                fontWeight: FontWeight.w600,
-                                color: tokens.accentPrimary,
-                              ),
-                            ),
-                          ),
-                        Row(
+                  child: Center(
+                    child: ConstrainedBox(
+                      constraints: BoxConstraints(
+                        maxWidth: wideScreen ? 680 : double.infinity,
+                      ),
+                      child: FloatingCard(
+                        frosted: true,
+                        radius: 26,
+                        padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
-                            TextButton(
-                              onPressed: _chapterIdx > 0
-                                  ? () => _loadChapter(_chapterIdx - 1)
-                                  : null,
-                              child: const Text(
-                                '上一章',
-                                style: TextStyle(fontSize: 12),
+                            if (_scrubChapterIdx != null && _chapters.isNotEmpty)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  '${_chapters[_scrubChapterIdx!.clamp(0, _chapters.length - 1)].title} (${_scrubChapterIdx! + 1}/${_chapters.length})',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: tokens.accentPrimary,
+                                  ),
+                                ),
                               ),
+                            Row(
+                              children: [
+                                TextButton(
+                                  onPressed: _chapterIdx > 0
+                                      ? () => _loadChapter(_chapterIdx - 1)
+                                      : null,
+                                  child: Text(
+                                    l10n.prevChapter,
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                                Expanded(
+                                  child: Slider(
+                                    min: 0,
+                                    max: (_chapters.length - 1)
+                                        .clamp(1, 1000000)
+                                        .toDouble(),
+                                    value: (_scrubChapterIdx ?? _chapterIdx)
+                                        .clamp(
+                                            0,
+                                            (_chapters.length - 1)
+                                                .clamp(1, 1000000))
+                                        .toDouble(),
+                                    onChanged: _chapters.length > 1
+                                        ? (v) => setState(
+                                            () => _scrubChapterIdx = v.round())
+                                        : null,
+                                    onChangeEnd: _chapters.length > 1
+                                        ? (v) {
+                                            final target = v.round();
+                                            setState(
+                                                () => _scrubChapterIdx = null);
+                                            if (target != _chapterIdx) {
+                                              _loadChapter(target);
+                                            }
+                                          }
+                                        : null,
+                                  ),
+                                ),
+                                TextButton(
+                                  onPressed: _chapterIdx + 1 < _chapters.length
+                                      ? () => _loadChapter(_chapterIdx + 1)
+                                      : null,
+                                  child: Text(
+                                    l10n.nextChapter,
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ),
+                              ],
                             ),
-                            Expanded(
-                              child: Slider(
-                                min: 0,
-                                max: (_chapters.length - 1)
-                                    .clamp(1, 1000000)
-                                    .toDouble(),
-                                value: (_scrubChapterIdx ?? _chapterIdx)
-                                    .clamp(0,
-                                        (_chapters.length - 1).clamp(1, 1000000))
-                                    .toDouble(),
-                                onChanged: _chapters.length > 1
-                                    ? (v) => setState(
-                                        () => _scrubChapterIdx = v.round())
-                                    : null,
-                                onChangeEnd: _chapters.length > 1
-                                    ? (v) {
-                                        final target = v.round();
-                                        setState(() => _scrubChapterIdx = null);
-                                        if (target != _chapterIdx) {
-                                          _loadChapter(target);
-                                        }
-                                      }
-                                    : null,
-                              ),
-                            ),
-                            TextButton(
-                              onPressed: _chapterIdx + 1 < _chapters.length
-                                  ? () => _loadChapter(_chapterIdx + 1)
-                                  : null,
-                              child: const Text(
-                                '下一章',
-                                style: TextStyle(fontSize: 12),
-                              ),
+
+                            if (_sheetTab == 'toc')
+                              _buildTocPanel(tokens, annotations),
+                            if (_sheetTab == 'style')
+                              _buildStylePanel(tokens, settings, settingsCtrl),
+                            if (_sheetTab == 'anim')
+                              _buildAnimPanel(tokens, settings, settingsCtrl),
+                            if (_sheetTab == 'more')
+                              _buildMorePanel(tokens, settings, settingsCtrl),
+
+                            const Divider(height: 14),
+                            Row(
+                              mainAxisAlignment: MainAxisAlignment.spaceAround,
+                              children: [
+                                _ReaderTabBtn(
+                                  icon: InkIcon.toc,
+                                  label: l10n.readerTabToc,
+                                  active: _sheetTab == 'toc',
+                                  onTap: () {
+                                    ScaffoldMessenger.of(context)
+                                        .hideCurrentSnackBar();
+                                    final opening = _sheetTab != 'toc';
+                                    setState(
+                                        () => _sheetTab = opening ? 'toc' : null);
+                                    if (opening) _scrollTocToCurrentChapter();
+                                  },
+                                ),
+                                _ReaderTabBtn(
+                                  icon: paper == BookPaperTheme.dark ||
+                                          paper == BookPaperTheme.oled
+                                      ? InkIcon.sun
+                                      : InkIcon.moon,
+                                  label: paper == BookPaperTheme.dark ||
+                                          paper == BookPaperTheme.oled
+                                      ? l10n.readerTabLight
+                                      : l10n.readerTabDark,
+                                  active: false,
+                                  onTap: () {
+                                    final next = paper == BookPaperTheme.dark ||
+                                            paper == BookPaperTheme.oled
+                                        ? _lastLightPaper
+                                        : BookPaperTheme.dark;
+                                    settingsCtrl.update(
+                                        (s) => s.copyWith(paperTheme: next));
+                                  },
+                                ),
+                                _ReaderTabBtn(
+                                  icon: InkIcon.typography,
+                                  label: l10n.readerTabStyle,
+                                  active: _sheetTab == 'style',
+                                  onTap: () {
+                                    ScaffoldMessenger.of(context)
+                                        .hideCurrentSnackBar();
+                                    setState(() => _sheetTab =
+                                        _sheetTab == 'style' ? null : 'style');
+                                  },
+                                ),
+                                _ReaderTabBtn(
+                                  icon: InkIcon.pageCurl,
+                                  label: l10n.readerTabTurn,
+                                  active: _sheetTab == 'anim',
+                                  onTap: () {
+                                    ScaffoldMessenger.of(context)
+                                        .hideCurrentSnackBar();
+                                    setState(() => _sheetTab =
+                                        _sheetTab == 'anim' ? null : 'anim');
+                                  },
+                                ),
+                                _ReaderTabBtn(
+                                  icon: InkIcon.gear,
+                                  label: l10n.readerTabMore,
+                                  active: _sheetTab == 'more',
+                                  onTap: () {
+                                    ScaffoldMessenger.of(context)
+                                        .hideCurrentSnackBar();
+                                    setState(() => _sheetTab =
+                                        _sheetTab == 'more' ? null : 'more');
+                                  },
+                                ),
+                              ],
                             ),
                           ],
                         ),
-
-                        if (_sheetTab == 'toc')
-                          _buildTocPanel(tokens, annotations),
-                        if (_sheetTab == 'style')
-                          _buildStylePanel(tokens, settings, settingsCtrl),
-                        if (_sheetTab == 'anim')
-                          _buildAnimPanel(tokens, settings, settingsCtrl),
-                        if (_sheetTab == 'more')
-                          _buildMorePanel(tokens, settings, settingsCtrl),
-
-                        const Divider(height: 14),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
-                          children: [
-                            _ReaderTabBtn(
-                              icon: InkIcon.toc,
-                              label: '目录',
-                              active: _sheetTab == 'toc',
-                              onTap: () {
-                                final opening = _sheetTab != 'toc';
-                                setState(
-                                    () => _sheetTab = opening ? 'toc' : null);
-                                if (opening) _scrollTocToCurrentChapter();
-                              },
-                            ),
-                            _ReaderTabBtn(
-                              icon: paper == BookPaperTheme.dark ||
-                                      paper == BookPaperTheme.oled
-                                  ? InkIcon.sun
-                                  : InkIcon.moon,
-                              label: paper == BookPaperTheme.dark ||
-                                      paper == BookPaperTheme.oled
-                                  ? '日间'
-                                  : '夜间',
-                              active: false,
-                              onTap: () {
-                                final next = paper == BookPaperTheme.dark ||
-                                        paper == BookPaperTheme.oled
-                                    ? BookPaperTheme.parchment
-                                    : BookPaperTheme.dark;
-                                settingsCtrl
-                                    .update((s) => s.copyWith(paperTheme: next));
-                              },
-                            ),
-                            _ReaderTabBtn(
-                              icon: InkIcon.typography,
-                              label: '排版',
-                              active: _sheetTab == 'style',
-                              onTap: () => setState(() => _sheetTab =
-                                  _sheetTab == 'style' ? null : 'style'),
-                            ),
-                            _ReaderTabBtn(
-                              icon: InkIcon.pageCurl,
-                              label: '翻页',
-                              active: _sheetTab == 'anim',
-                              onTap: () => setState(() => _sheetTab =
-                                  _sheetTab == 'anim' ? null : 'anim'),
-                            ),
-                            _ReaderTabBtn(
-                              icon: InkIcon.gear,
-                              label: '更多',
-                              active: _sheetTab == 'more',
-                              onTap: () => setState(() => _sheetTab =
-                                  _sheetTab == 'more' ? null : 'more'),
-                            ),
-                          ],
-                        ),
-                      ],
+                      ),
                     ),
                   ),
                 ),
@@ -2260,6 +2764,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   Widget _buildHighlightFloatingBar(InkBoxTokens tokens) {
+    final l10n = context.l10n;
     final inspected = _inspectedAnnotation;
     final activeSel = _activeSelection;
 
@@ -2273,7 +2778,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         children: [
           if (inspected != null && inspected.noteText.trim().isNotEmpty) ...[
             Text(
-              '想法：${inspected.noteText}',
+              l10n.notePrefix(inspected.noteText),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: TextStyle(
@@ -2351,7 +2856,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   ),
                   onPressed: () => _saveActiveHighlight(),
                   child: Text(
-                    '划线',
+                    l10n.highlightAction,
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -2369,7 +2874,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   ),
                   onPressed: _promptNoteForActiveSelection,
                   child: Text(
-                    '写想法',
+                    l10n.writeNoteAction,
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -2389,10 +2894,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     final txt = activeSel.text;
                     await Clipboard.setData(ClipboardData(text: txt));
                     _clearSelectionAndInspector();
-                    _toast('已复制所选文字');
+                    _toast(l10n.copiedToast);
                   },
                   child: Text(
-                    '复制',
+                    l10n.copy,
                     style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
                   ),
                 ),
@@ -2410,7 +2915,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     _speakArbitraryText(txt);
                   },
                   child: Text(
-                    '朗读',
+                    l10n.readLabel,
                     style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
                   ),
                 ),
@@ -2430,7 +2935,9 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   ),
                   onPressed: () => _editInspectedHighlightNote(inspected),
                   child: Text(
-                    inspected.noteText.isEmpty ? '写想法' : '改想法',
+                    inspected.noteText.isEmpty
+                        ? l10n.writeNoteAction
+                        : l10n.editNoteAction,
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
@@ -2451,10 +2958,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                       ClipboardData(text: inspected.excerpt),
                     );
                     _clearSelectionAndInspector();
-                    _toast('已复制划线原文');
+                    _toast(l10n.copiedToast);
                   },
                   child: Text(
-                    '复制',
+                    l10n.copy,
                     style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
                   ),
                 ),
@@ -2470,10 +2977,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     await _db.softDeleteAnnotation(inspected.uuid);
                     await _refreshAnnotations();
                     _clearSelectionAndInspector();
-                    _toast('已删除划线');
+                    _toast(l10n.highlightDeletedToast);
                   },
                   child: Text(
-                    '删除划线',
+                    l10n.deleteHighlightAction,
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -2491,6 +2998,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   /// Spacious TOC & Bookmarks/Notes panel — all TXT rule/encoding settings live in BookDetailPage
   /// so maximum vertical space is dedicated to browsing chapters.
   Widget _buildTocPanel(InkBoxTokens tokens, List<Annotation> annotations) {
+    final l10n = context.l10n;
     final panelHeight =
         (MediaQuery.sizeOf(context).height * 0.45).clamp(240.0, 410.0);
 
@@ -2507,14 +3015,16 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     labelColor: tokens.accentPrimary,
                     unselectedLabelColor: tokens.inkMuted,
                     tabs: [
-                      Tab(text: '目录 (${_chapters.length})'),
-                      Tab(text: '书签/划线 (${annotations.length})'),
+                      Tab(text: l10n.tocTabTitle(_chapters.length)),
+                      Tab(text: l10n.annotationsTabTitle(annotations.length)),
                     ],
                   ),
                 ),
                 const SizedBox(width: 8),
                 InkPillChip(
-                  label: _tocReversed ? '倒序' : '正序',
+                  label: _tocReversed
+                      ? l10n.descendingOrder
+                      : l10n.ascendingOrder,
                   onTap: () {
                     setState(() => _tocReversed = !_tocReversed);
                     _scrollTocToCurrentChapter();
@@ -2577,7 +3087,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   annotations.isEmpty
                       ? Center(
                           child: Text(
-                            '暂无书签与划线笔记',
+                            l10n.noAnnotationsReaderHint,
                             style:
                                 TextStyle(fontSize: 12, color: tokens.inkMuted),
                           ),
@@ -2600,7 +3110,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                               title: Text(
                                 a.excerpt.isNotEmpty
                                     ? a.excerpt
-                                    : '第 ${a.chapterIndex + 1} 章书签',
+                                    : l10n.chapterLabelShort(a.chapterIndex + 1),
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: const TextStyle(fontSize: 12),
@@ -2651,12 +3161,16 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     BookReaderSettings settings,
     BookReaderSettingsController ctrl,
   ) {
+    final l10n = context.l10n;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
         Row(
           children: [
-            Text('字号', style: TextStyle(fontSize: 12, color: tokens.inkMuted)),
+            Text(
+              l10n.fontSizeLabel,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
             const SizedBox(width: 10),
             OutlinedButton(
               onPressed: () => ctrl.update(
@@ -2677,10 +3191,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             const Spacer(),
             InkPillChip(
               label: settings.chineseConversion == 'None'
-                  ? '原字'
+                  ? l10n.chineseOriginal
                   : settings.chineseConversion == 'ToTraditional'
-                      ? '繁體'
-                      : '简体',
+                      ? l10n.chineseTrad
+                      : l10n.chineseSimp,
               selected: settings.chineseConversion != 'None',
               onTap: () {
                 const order = ['None', 'ToTraditional', 'ToSimplified'];
@@ -2694,7 +3208,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         ),
         Row(
           children: [
-            Text('行距', style: TextStyle(fontSize: 12, color: tokens.inkMuted)),
+            Text(
+              l10n.lineHeightLabel,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
             Expanded(
               child: Slider(
                 min: 1.3,
@@ -2710,11 +3227,71 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           ],
         ),
         Row(
+          children: [
+            Text(
+              l10n.paragraphSpacingLabel,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
+            Expanded(
+              child: Slider(
+                min: 0.0,
+                max: 28.0,
+                value: settings.paragraphSpacing.clamp(0.0, 28.0),
+                onChanged: (v) =>
+                    ctrl.update((s) => s.copyWith(paragraphSpacing: v)),
+              ),
+            ),
+            Text(
+              '${settings.paragraphSpacing.round()}',
+              style: const TextStyle(fontSize: 11.5),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            Text(
+              l10n.layoutModeLabel,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Wrap(
+                spacing: 6,
+                runSpacing: 4,
+                children: BookPageLayoutMode.values.map((lm) {
+                  return InkPillChip(
+                    label: lm.labelOf(l10n),
+                    selected: settings.pageLayoutMode == lm,
+                    onTap: () =>
+                        ctrl.update((s) => s.copyWith(pageLayoutMode: lm)),
+                  );
+                }).toList(),
+              ),
+            ),
+            InkSwitch(
+              value: settings.indentFirstLine,
+              onChanged: (v) =>
+                  ctrl.update((s) => s.copyWith(indentFirstLine: v)),
+            ),
+            const SizedBox(width: 4),
+            Text(
+              l10n.firstLineIndentLabel,
+              style: TextStyle(fontSize: 11, color: tokens.inkMuted),
+            ),
+          ],
+        ),
+        const SizedBox(height: 8),
+        Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: BookPaperTheme.values.map((t) {
             final active = settings.paperTheme == t;
             return GestureDetector(
-              onTap: () => ctrl.update((s) => s.copyWith(paperTheme: t)),
+              onTap: () {
+                if (t != BookPaperTheme.dark && t != BookPaperTheme.oled) {
+                  _lastLightPaper = t;
+                }
+                ctrl.update((s) => s.copyWith(paperTheme: t));
+              },
               child: Container(
                 padding:
                     const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
@@ -2727,7 +3304,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   ),
                 ),
                 child: Text(
-                  t.label,
+                  t.labelOf(l10n),
                   style: TextStyle(
                     fontSize: 11,
                     fontWeight: FontWeight.w600,
@@ -2748,6 +3325,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     BookReaderSettings settings,
     BookReaderSettingsController ctrl,
   ) {
+    final l10n = context.l10n;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -2758,7 +3336,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           children: PageTurnMode.values.map((m) {
             final active = settings.pageTurnMode == m;
             return InkPillChip(
-              label: m.label,
+              label: m.labelOf(l10n),
               selected: active,
               onTap: () {
                 if (m != PageTurnMode.scroll && _autoScrolling) {
@@ -2777,7 +3355,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           children: TapZonePreset.values.map((p) {
             final active = settings.tapZonePreset == p;
             return InkPillChip(
-              label: p.label,
+              label: p.labelOf(l10n),
               selected: active,
               onTap: () => ctrl.update((s) => s.copyWith(tapZonePreset: p)),
             );
@@ -2786,10 +3364,15 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Text('自动滚屏', style: TextStyle(fontSize: 12, color: tokens.inkMuted)),
+            Text(
+              l10n.autoScrollLabel,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
             FilledButton.tonal(
               onPressed: _toggleAutoScroll,
-              child: Text(_autoScrolling ? '停止滚屏' : '开启自动滚屏'),
+              child: Text(
+                _autoScrolling ? l10n.stopAutoScroll : l10n.startAutoScroll,
+              ),
             ),
           ],
         ),
@@ -2802,6 +3385,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     BookReaderSettings settings,
     BookReaderSettingsController ctrl,
   ) {
+    final l10n = context.l10n;
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
@@ -2811,7 +3395,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '音量键翻页',
+                l10n.volumeKeyPaging,
                 style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
               ),
               InkSwitch(
@@ -2830,7 +3414,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                '阅读时保持屏幕常亮',
+                l10n.keepScreenOn,
                 style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
               ),
               InkSwitch(
@@ -2843,27 +3427,53 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             ],
           ),
         ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                l10n.edgeBrightnessGesture,
+                style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
+              ),
+              InkSwitch(
+                value: settings.edgeBrightnessGesture,
+                onChanged: (v) =>
+                    ctrl.update((s) => s.copyWith(edgeBrightnessGesture: v)),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 6),
         Row(
           children: [
             Expanded(
               child: OutlinedButton(
                 onPressed: _openTtsSettingsFromReader,
-                child: const Text('TTS 朗读设置', style: TextStyle(fontSize: 12)),
+                child: Text(
+                  l10n.ttsSettingsBtn,
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: OutlinedButton(
                 onPressed: () => _showPurificationDialog(settings, ctrl),
-                child: const Text('正文净化规则', style: TextStyle(fontSize: 12)),
+                child: Text(
+                  l10n.purificationBtn,
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
             ),
             const SizedBox(width: 8),
             Expanded(
               child: OutlinedButton(
                 onPressed: _exportNotesMarkdown,
-                child: const Text('导出笔记', style: TextStyle(fontSize: 12)),
+                child: Text(
+                  l10n.exportNotesBtn,
+                  style: const TextStyle(fontSize: 12),
+                ),
               ),
             ),
           ],
@@ -2876,41 +3486,41 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     BookReaderSettings settings,
     BookReaderSettingsController ctrl,
   ) async {
+    final l10n = context.l10n;
     final patCtrl = TextEditingController();
     final repCtrl = TextEditingController();
     final result = await showInkModal<({String pat, String rep})>(
       context: context,
-      title: '添加正文净化替换规则',
-      subtitle: '支持普通文本或正则表达式',
+      title: l10n.purificationDialogTitle,
       disposables: [patCtrl, repCtrl],
       builder: (ctx) => Column(
         mainAxisSize: MainAxisSize.min,
         children: [
           InkTextField(
             controller: patCtrl,
-            label: '待过滤文本或正则',
-            hintText: '例如：请收藏本站.*',
+            label: l10n.purificationPatternLabel,
+            hintText: l10n.purificationPatternHint,
             monospace: true,
           ),
           const SizedBox(height: 10),
           InkTextField(
             controller: repCtrl,
-            label: '替换为（留空即删除）',
-            hintText: '留空则直接移除匹配内容',
+            label: l10n.purificationReplacementLabel,
+            hintText: l10n.purificationReplacementHint,
           ),
         ],
       ),
       actionsBuilder: (ctx) => [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(),
-          child: const Text('取消'),
+          child: Text(l10n.cancel),
         ),
         FilledButton(
           onPressed: () => Navigator.of(ctx).pop((
             pat: patCtrl.text.trim(),
             rep: repCtrl.text,
           )),
-          child: const Text('添加并生效'),
+          child: Text(l10n.addAndApply),
         ),
       ],
     );
@@ -2920,7 +3530,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           replaceRules: [
             ...s.replaceRules,
             ReplaceRuleConfig(
-              name: '自定义净化',
+              name: l10n.purificationBtn,
               pattern: result.pat,
               replacement: result.rep,
               isRegex: true,
@@ -2946,6 +3556,7 @@ class _NativePdfPageCanvas extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final l10n = context.l10n;
     return FutureBuilder<Uint8List?>(
       future: platform.renderPdfPage(pdfPath, pageIndex, scale: 2.0),
       builder: (context, snap) {
@@ -2954,11 +3565,11 @@ class _NativePdfPageCanvas extends StatelessWidget {
         }
         final bytes = snap.data;
         if (bytes == null) {
-          return const Center(
+          return Center(
             child: Padding(
-              padding: EdgeInsets.all(24),
+              padding: const EdgeInsets.all(24),
               child: Text(
-                '当前平台暂不支持原版 PDF 位图渲染，请点击顶栏「文本重排」体验 Rust 智能重排模式',
+                l10n.pdfUnsupportedPlatform,
                 textAlign: TextAlign.center,
               ),
             ),

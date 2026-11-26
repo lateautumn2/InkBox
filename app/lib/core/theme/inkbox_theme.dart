@@ -6,9 +6,9 @@ enum InkBoxUiStyle {
   classic,
 }
 
-/// Global application color theme preference.
+/// Global application color theme preference (Crisp Ink & Mineral Paper).
 enum InkBoxThemePreference {
-  warmPaperLight,
+  crispLight,
   darkTheater,
   oledBlack,
   system,
@@ -17,39 +17,39 @@ enum InkBoxThemePreference {
 /// Built-in 5 paper palettes for the book reader engine.
 enum BookPaperTheme {
   white(
-    label: '纸白',
+    label: '素白',
     background: Color(0xFFFFFFFF),
-    foreground: Color(0xFF1D1D1F),
-    secondary: Color(0xFF7A7A80),
-    highlight: Color(0xFFFFE599),
+    foreground: Color(0xFF1A1C20),
+    secondary: Color(0xFF7A808B),
+    highlight: Color(0xFFFFE082),
   ),
   parchment(
-    label: '羊皮纸',
-    background: Color(0xFFF5EFE2),
-    foreground: Color(0xFF32291E),
-    secondary: Color(0xFF877865),
-    highlight: Color(0xFFEED29A),
+    label: '轻象牙',
+    background: Color(0xFFF7F6F2),
+    foreground: Color(0xFF232529),
+    secondary: Color(0xFF7B7E85),
+    highlight: Color(0xFFFBE192),
   ),
   sage(
-    label: '护眼绿',
-    background: Color(0xFFDCE8DB),
-    foreground: Color(0xFF233324),
-    secondary: Color(0xFF5E7560),
-    highlight: Color(0xFFBCE0B8),
+    label: '青瓷',
+    background: Color(0xFFEAF2EC),
+    foreground: Color(0xFF1E2D24),
+    secondary: Color(0xFF5F7366),
+    highlight: Color(0xFFBDE2C3),
   ),
   dark(
-    label: '深灰夜',
-    background: Color(0xFF1E2024),
-    foreground: Color(0xFFC8C6C0),
-    secondary: Color(0xFF777980),
-    highlight: Color(0xFF463E26),
+    label: '墨灰夜',
+    background: Color(0xFF1A1D22),
+    foreground: Color(0xFFCED3DB),
+    secondary: Color(0xFF7B8290),
+    highlight: Color(0xFF3A4E66),
   ),
   oled(
-    label: 'OLED黑',
+    label: '纯黑夜',
     background: Color(0xFF000000),
-    foreground: Color(0xFFA8A8A8),
-    secondary: Color(0xFF5A5A5A),
-    highlight: Color(0xFF332C18),
+    foreground: Color(0xFFADB3BE),
+    secondary: Color(0xFF5E6572),
+    highlight: Color(0xFF2C3B4D),
   );
 
   const BookPaperTheme({
@@ -67,7 +67,7 @@ enum BookPaperTheme {
   final Color highlight;
 }
 
-/// Semantic design tokens for InkBox (Slate Ink & Warm Paper + FloatingCard).
+/// Semantic design tokens for InkBox (Crisp Ink & Mineral Paper + FloatingCard).
 @immutable
 class InkBoxTokens extends ThemeExtension<InkBoxTokens> {
   const InkBoxTokens({
@@ -178,10 +178,10 @@ class InkBoxTokens extends ThemeExtension<InkBoxTokens> {
 }
 
 class InkBoxTheme {
-  static const Color slateInkLight = Color(0xFF3B5978);
-  static const Color slateInkDark = Color(0xFF82A9D4);
-  static const Color terracottaLight = Color(0xFFB86B4B);
-  static const Color terracottaDark = Color(0xFFD88B6A);
+  static const Color slateInkLight = Color(0xFF2F5C8F);
+  static const Color slateInkDark = Color(0xFF6FA4E0);
+  static const Color vermilionLight = Color(0xFFCF4B40);
+  static const Color vermilionDark = Color(0xFFE86A60);
 
   static ThemeData light({
     required InkBoxUiStyle uiStyle,
@@ -196,47 +196,47 @@ class InkBoxTheme {
         : null;
     final accent = dynamicScheme?.primary ?? slateInkLight;
     final accentSoft =
-        dynamicScheme?.primaryContainer ?? const Color(0xFFE0EAF4);
+        dynamicScheme?.primaryContainer ?? const Color(0xFFE3ECF6);
 
     final tokens = InkBoxTokens(
-      canvasBg: isFloating ? const Color(0xFFF3EFE8) : const Color(0xFFFAF8F4),
+      canvasBg: isFloating ? const Color(0xFFF4F5F7) : const Color(0xFFFAFAFB),
       cardSurface: const Color(0xFFFFFFFF),
       glassSurface: const Color(0xEBFFFFFF),
-      surfaceVariant: const Color(0xFFEAE4DA),
-      subtleBorder: const Color(0x172A2622),
-      inkPrimary: const Color(0xFF22201E),
-      inkMuted: const Color(0xFF6C665E),
+      surfaceVariant: const Color(0xFFE9ECF1),
+      subtleBorder: const Color(0x14161A22),
+      inkPrimary: const Color(0xFF15171C),
+      inkMuted: const Color(0xFF636A76),
       accentPrimary: accent,
       accentSoft: accentSoft,
-      accentWarm: terracottaLight,
-      statusOk: const Color(0xFF2E7D5B),
-      cardRadius: isFloating ? 20 : 14,
-      dockRadius: 28,
+      accentWarm: vermilionLight,
+      statusOk: const Color(0xFF248A62),
+      cardRadius: isFloating ? 16 : 12,
+      dockRadius: 24,
       cardShadows: isFloating
           ? const [
               BoxShadow(
-                color: Color(0x18221D16),
-                blurRadius: 18,
-                spreadRadius: -6,
-                offset: Offset(0, 8),
+                color: Color(0x0E101828),
+                blurRadius: 16,
+                spreadRadius: -4,
+                offset: Offset(0, 6),
               ),
               BoxShadow(
-                color: Color(0x0D221D16),
-                blurRadius: 4,
+                color: Color(0x08101828),
+                blurRadius: 3,
                 offset: Offset(0, 1),
               ),
             ]
           : const [],
       dockShadows: const [
         BoxShadow(
-          color: Color(0x24221D16),
-          blurRadius: 26,
-          spreadRadius: -8,
-          offset: Offset(0, 12),
+          color: Color(0x1C101828),
+          blurRadius: 22,
+          spreadRadius: -6,
+          offset: Offset(0, 10),
         ),
         BoxShadow(
-          color: Color(0x10221D16),
-          blurRadius: 6,
+          color: Color(0x0C101828),
+          blurRadius: 5,
           offset: Offset(0, 2),
         ),
       ],
@@ -250,7 +250,7 @@ class InkBoxTheme {
             ))
         .copyWith(
       primary: accent,
-      secondary: terracottaLight,
+      secondary: vermilionLight,
       surface: tokens.cardSurface,
       surfaceContainerLowest: tokens.canvasBg,
       onSurface: tokens.inkPrimary,
@@ -280,22 +280,22 @@ class InkBoxTheme {
           color: tokens.cardSurface,
         ),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: tokens.surfaceVariant.withValues(alpha: 0.72),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: tokens.subtleBorder),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: tokens.subtleBorder),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: tokens.accentPrimary, width: 1.5),
         ),
       ),
@@ -319,39 +319,40 @@ class InkBoxTheme {
           )
         : null;
     final accent = dynamicScheme?.primary ?? slateInkDark;
-    final accentSoft =
-        dynamicScheme?.primaryContainer ?? const Color(0xFF243344);
+    final accentSoft = dynamicScheme?.primaryContainer ??
+        (oled ? const Color(0xFF1A283A) : const Color(0xFF1F2F43));
 
     final tokens = InkBoxTokens(
-      canvasBg: oled ? const Color(0xFF000000) : const Color(0xFF101114),
-      cardSurface: oled ? const Color(0xFF101114) : const Color(0xFF1A1C21),
-      glassSurface: oled ? const Color(0xEB101114) : const Color(0xEB1A1C21),
-      surfaceVariant: const Color(0xFF24272F),
-      subtleBorder: const Color(0x16FFFFFF),
-      inkPrimary: const Color(0xFFEAE8E3),
-      inkMuted: const Color(0xFF989690),
+      canvasBg: oled ? const Color(0xFF000000) : const Color(0xFF101216),
+      cardSurface: oled ? const Color(0xFF0D0F13) : const Color(0xFF181B21),
+      glassSurface: oled ? const Color(0xEB0D0F13) : const Color(0xEB181B21),
+      surfaceVariant: oled ? const Color(0xFF171A21) : const Color(0xFF222630),
+      subtleBorder:
+          oled ? const Color(0x1CFFFFFF) : const Color(0x17FFFFFF),
+      inkPrimary: oled ? const Color(0xFFE4E6EB) : const Color(0xFFECEDF0),
+      inkMuted: oled ? const Color(0xFF838A98) : const Color(0xFF9198A6),
       accentPrimary: accent,
       accentSoft: accentSoft,
-      accentWarm: terracottaDark,
-      statusOk: const Color(0xFF55B388),
-      cardRadius: isFloating ? 20 : 14,
-      dockRadius: 28,
+      accentWarm: vermilionDark,
+      statusOk: const Color(0xFF4DC191),
+      cardRadius: isFloating ? 16 : 12,
+      dockRadius: 24,
       cardShadows: isFloating
           ? const [
               BoxShadow(
-                color: Color(0x70000000),
-                blurRadius: 18,
-                spreadRadius: -6,
-                offset: Offset(0, 8),
+                color: Color(0x5A000000),
+                blurRadius: 16,
+                spreadRadius: -4,
+                offset: Offset(0, 6),
               ),
             ]
           : const [],
       dockShadows: const [
         BoxShadow(
-          color: Color(0x99000000),
-          blurRadius: 28,
-          spreadRadius: -8,
-          offset: Offset(0, 12),
+          color: Color(0x88000000),
+          blurRadius: 24,
+          spreadRadius: -6,
+          offset: Offset(0, 10),
         ),
       ],
       uiStyle: uiStyle,
@@ -364,7 +365,7 @@ class InkBoxTheme {
             ))
         .copyWith(
       primary: accent,
-      secondary: terracottaDark,
+      secondary: vermilionDark,
       surface: tokens.cardSurface,
       surfaceContainerLowest: tokens.canvasBg,
       onSurface: tokens.inkPrimary,
@@ -394,22 +395,22 @@ class InkBoxTheme {
           color: tokens.cardSurface,
         ),
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(16),
+          borderRadius: BorderRadius.circular(14),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: tokens.surfaceVariant.withValues(alpha: 0.72),
         border: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: tokens.subtleBorder),
         ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: tokens.subtleBorder),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(12),
           borderSide: BorderSide(color: tokens.accentPrimary, width: 1.5),
         ),
       ),
@@ -420,4 +421,3 @@ class InkBoxTheme {
     );
   }
 }
-

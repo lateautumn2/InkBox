@@ -117,7 +117,7 @@ class ImportService {
   Future<String> _computeFingerprint(String localPath) async {
     final entity = FileSystemEntity.typeSync(localPath);
     if (entity == FileSystemEntityType.notFound) {
-      throw FileSystemException('找不到待导入文件', localPath);
+      throw FileSystemException('ERR_FILE_NOT_FOUND', localPath);
     }
     if (entity == FileSystemEntityType.directory) {
       final children = Directory(localPath)
@@ -133,7 +133,7 @@ class ImportService {
     final file = File(localPath);
     final stat = await file.stat();
     if (stat.size <= 0) {
-      throw StateError('文件内容为空 (0 字节)，请确认文件已完整下载到本地');
+      throw StateError('ERR_FILE_EMPTY');
     }
 
     if (rustCore != null) {
@@ -309,7 +309,7 @@ class ImportService {
     final isDir = FileSystemEntity.isDirectorySync(localPath);
     final kind = forceKind ?? classifyExtension(localPath, isDirectory: isDir);
     if (kind == 'unknown') {
-      throw UnsupportedError('不支持的文件类型: ${p.basename(localPath)}');
+      throw UnsupportedError('ERR_UNSUPPORTED_TYPE: ${p.basename(localPath)}');
     }
 
     final hash = await _computeFingerprint(localPath);
@@ -758,7 +758,7 @@ class ImportService {
           );
         }
         if (localPath == null) {
-          errors.add('${c.name}: 无法读取 SAF 文件流');
+          errors.add('${c.name}: ERR_STREAM_OPEN');
           continue;
         }
         final kind = autoClassify ? c.targetKind : 'book';
