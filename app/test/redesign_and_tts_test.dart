@@ -33,6 +33,7 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
   final StreamController<PlatformEvent> eventCtrl =
       StreamController<PlatformEvent>.broadcast();
   final List<String> spokenTexts = [];
+  final List<String> playedAudioPaths = [];
   final Map<String, String> secureStore = {};
   bool speakShouldFail = false;
 
@@ -88,8 +89,10 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
     String path, {
     double speed = 1.0,
     String? playbackId,
-  }) async =>
-      true;
+  }) async {
+    playedAudioPaths.add(path);
+    return true;
+  }
   @override
   Future<void> pauseAudio() async {}
   @override
@@ -699,6 +702,199 @@ void main() {
       expect(ctrl.status, TtsPlaybackStatus.paused);
       expect(errorCode, isNotNull);
       expect(platform.spokenTexts, isEmpty);
+    });
+
+    test('applyTemplate encodeForUrl & TtsAudioCache configFingerprint work cleanly', () {
+      final urlRendered = OnlineTtsClient.applyTemplate(
+        'https://tts.example.com?v={{voice}}&r={{ratePct}}',
+        text: 'hello',
+        voice: '中文音色',
+        rate: 1.5,
+        pitch: 1.0,
+        encodeForUrl: true,
+      );
+      expect(urlRendered, contains(Uri.encodeComponent('中文音色')));
+      expect(urlRendered, contains('%2B50%25'));
+
+      final jsonRendered = OnlineTtsClient.applyTemplate(
+        '{"voice":"{{voice}}","ratePct":"{{ratePct}}","t":"{{textEncoded}}"}',
+        text: 'a b',
+        voice: '中文音色',
+        rate: 1.5,
+        pitch: 1.0,
+        encodeForUrl: false,
+      );
+      expect(jsonRendered, contains('"voice":"中文音色"'));
+      expect(jsonRendered, contains('"ratePct":"+50%"'));
+      expect(jsonRendered, contains('"t":"a%20b"'));
+
+      final cache = TtsAudioCache();
+      final k1 = cache.keyFor(
+        profileId: 'p1',
+        configFingerprint: 'POST|https://a.example/tts|{"a":1}',
+        voice: 'v',
+        rate: 1.0,
+        pitch: 1.0,
+        format: 'mp3',
+        text: 'hello',
+      );
+      final k2 = cache.keyFor(
+        profileId: 'p1',
+        configFingerprint: 'POST|https://b.example/tts|{"a":1}',
+        voice: 'v',
+        rate: 1.0,
+        pitch: 1.0,
+        format: 'mp3',
+        text: 'hello',
+      );
+      expect(k1, isNot(k2));
+    });
+
+    test('TtsPlaybackController pause during loading prevents late play & safely drops failing prefetches', () async {
+      final prevHttpOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevHttpOverrides);
+
+      final tmpCache = Directory.systemTemp.createTempSync('inkbox_pause_load_');
+      final gate = Completer<void>();
+      var chunk0Hits = 0;
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async {
+        if (!gate.isCompleted) gate.complete();
+        await server.close(force: true);
+        if (tmpCache.existsSync()) tmpCache.deleteSync(recursive: true);
+      });
+
+      server.listen((req) async {
+        try {
+          final body = await utf8.decodeStream(req);
+          if (body.contains('第一句')) {
+            chunk0Hits++;
+            if (chunk0Hits == 1) {
+              await gate.future;
+              req.response.statusCode = HttpStatus.ok;
+              req.response.headers.contentType = ContentType('audio', 'mpeg');
+              req.response.add([0x49, 0x44, 0x33, 0x01, 0x02]);
+              await req.response.close();
+            } else {
+              req.response.statusCode = HttpStatus.ok;
+              req.response.headers.contentType = ContentType('audio', 'mpeg');
+              req.response.add([0x49, 0x44, 0x33, 0x03, 0x04]);
+              await req.response.close();
+            }
+          } else if (body.contains('第二句') || body.contains('第三句')) {
+            // Prefetched chunks fail with 500 — must NOT trigger unhandled Future errors
+            req.response.statusCode = HttpStatus.internalServerError;
+            await req.response.close();
+          } else {
+            req.response.statusCode = HttpStatus.ok;
+            req.response.headers.contentType = ContentType('audio', 'mpeg');
+            req.response.add([0x49, 0x44, 0x33, 0x03, 0x04]);
+            await req.response.close();
+          }
+        } catch (_) {}
+      });
+
+      final platform = _RedesignMockPlatformBridge();
+      final client = OnlineTtsClient(
+        cache: TtsAudioCache(overrideDirPath: tmpCache.path),
+      );
+      final ctrl = TtsPlaybackController(platform: platform, onlineClient: client);
+      addTearDown(() async {
+        ctrl.dispose();
+        await platform.eventCtrl.close();
+      });
+
+      final profile = OnlineTtsProfile(
+        id: 'slow_online',
+        name: 'Slow',
+        kind: OnlineTtsProviderKind.openAiCompatible,
+        endpointUrl: 'http://127.0.0.1:${server.port}/v1/audio/speech',
+      );
+      final chunks = const [
+        TtsSentenceChunk(index: 0, startOffset: 0, endOffset: 3, text: '第一句'),
+        TtsSentenceChunk(index: 1, startOffset: 3, endOffset: 6, text: '第二句'),
+        TtsSentenceChunk(index: 2, startOffset: 6, endOffset: 9, text: '第三句'),
+      ];
+
+      final startFut = ctrl.startChunks(
+        chunks,
+        readerSettings: const BookReaderSettings(),
+        ttsConfig: TtsConfigState(
+          mode: TtsEngineMode.online,
+          activeProfileId: 'slow_online',
+          profiles: [profile],
+          fallbackToLocalTts: false,
+        ),
+      );
+
+      // Give server time to enter gate on chunk 0 and fail prefetches for chunks 1 & 2
+      await Future<void>.delayed(const Duration(milliseconds: 80));
+      expect(ctrl.status, TtsPlaybackStatus.loading);
+
+      await ctrl.pause();
+      gate.complete();
+      final startRes = await startFut;
+
+      expect(startRes, isFalse);
+      expect(ctrl.status, TtsPlaybackStatus.paused);
+      expect(platform.playedAudioPaths, isEmpty);
+
+      // Resume retries cleanly using fresh HTTP call and plays audio
+      await ctrl.resume();
+      expect(ctrl.status, TtsPlaybackStatus.playing);
+      expect(platform.playedAudioPaths.length, 1);
+
+      await ctrl.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    });
+
+    test('TtsConfigController sets hydrated and preserves pre-hydration mutations', () async {
+      final persisted = {
+        'mode': 'local',
+        'activeProfileId': 'saved_p1',
+        'profiles': [
+          const OnlineTtsProfile(
+            id: 'saved_p1',
+            name: 'Saved Custom',
+            kind: OnlineTtsProviderKind.openAiCompatible,
+            endpointUrl: 'https://saved.example/v1/audio/speech',
+          ).toJson(),
+        ],
+        'fallbackToLocalTts': true,
+        'sleepAtChapterEnd': false,
+      };
+      SharedPreferences.setMockInitialValues({
+        'inkbox_tts_config_v2': jsonEncode(persisted),
+      });
+
+      final platform = _RedesignMockPlatformBridge()
+        ..secureStore['tts_secret_saved_p1'] = 'sk-from-keystore';
+      final container1 = ProviderContainer(
+        overrides: [platformBridgeProvider.overrideWithValue(platform)],
+      );
+      addTearDown(container1.dispose);
+
+      container1.read(ttsConfigProvider);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      final loaded = container1.read(ttsConfigProvider);
+      expect(loaded.hydrated, isTrue);
+      expect(loaded.activeProfile.id, 'saved_p1');
+      expect(loaded.secretFor('saved_p1'), 'sk-from-keystore');
+
+      // Mutating before hydration finishes must not be clobbered by _hydrate()
+      final container2 = ProviderContainer(
+        overrides: [platformBridgeProvider.overrideWithValue(platform)],
+      );
+      addTearDown(container2.dispose);
+      final notifier2 = container2.read(ttsConfigProvider.notifier);
+      await notifier2.setMode(TtsEngineMode.online);
+      await Future<void>.delayed(const Duration(milliseconds: 60));
+      final mutated = container2.read(ttsConfigProvider);
+      expect(mutated.hydrated, isTrue);
+      expect(mutated.mode, TtsEngineMode.online);
+      await platform.eventCtrl.close();
     });
   });
 }

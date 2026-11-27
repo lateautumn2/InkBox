@@ -1696,5 +1696,8 @@ class AppLocalizationsJa extends AppLocalizations {
   String get errInvalidAudio => '有効な音声データが返されませんでした';
 
   @override
+  String get errInvalidJson => 'JSON 形式が無効です';
+
+  @override
   String get errUnknown => '処理に失敗しました';
 }

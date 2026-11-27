@@ -29,6 +29,7 @@ class TtsAudioCache {
 
   String keyFor({
     required String profileId,
+    String configFingerprint = '',
     required String voice,
     required double rate,
     required double pitch,
@@ -36,7 +37,7 @@ class TtsAudioCache {
     required String text,
   }) {
     final input =
-        '$profileId|$voice|${rate.toStringAsFixed(2)}|${pitch.toStringAsFixed(2)}|$format|$text';
+        '$profileId|$configFingerprint|$voice|${rate.toStringAsFixed(2)}|${pitch.toStringAsFixed(2)}|$format|$text';
     return sha256.convert(utf8.encode(input)).toString();
   }
 
@@ -45,6 +46,9 @@ class TtsAudioCache {
       final dir = await _cacheDir();
       final f = File(p.join(dir.path, '$cacheKey.$ext'));
       if (await f.exists() && await f.length() > 0) {
+        try {
+          await f.setLastModified(DateTime.now());
+        } catch (_) {}
         return f;
       }
     } catch (_) {}

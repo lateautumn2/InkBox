@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
@@ -50,6 +51,8 @@ class OnlineTtsClient {
   static const _edgeChromiumVersion = '130.0.2849.68';
   static const _edgeSecMsGecVersion = '1-$_edgeChromiumVersion';
   static const Duration _defaultTimeout = Duration(seconds: 10);
+  static final Random _rng = Random.secure();
+  static int _seq = 0;
 
   TtsAudioCache get cache => _cache;
 
@@ -67,8 +70,11 @@ class OnlineTtsClient {
     }
 
     final ext = _resolveFileExt(profile.format);
+    final configFingerprint =
+        '${profile.kind.name}|${profile.edgeUseGateway}|${profile.endpointUrl}|${profile.model}|${profile.httpMethod}|${profile.headersJson}|${profile.bodyTemplate}';
     final key = _cache.keyFor(
       profileId: profile.id,
+      configFingerprint: configFingerprint,
       voice: profile.voice,
       rate: rate,
       pitch: pitch,
@@ -258,10 +264,11 @@ class OnlineTtsClient {
         final rawMap = jsonDecode(
           applyTemplate(
             profile.headersJson,
-            text: text,
-            voice: profile.voice,
+            text: _jsonStringEscape(text),
+            voice: _jsonStringEscape(profile.voice),
             rate: rate,
             pitch: pitch,
+            encodeForUrl: false,
           ),
         );
         if (rawMap is Map) {
@@ -288,6 +295,7 @@ class OnlineTtsClient {
         voice: _jsonStringEscape(profile.voice),
         rate: rate,
         pitch: pitch,
+        encodeForUrl: false,
       );
       if (!headers.keys.any((k) => k.toLowerCase() == 'content-type')) {
         headers['Content-Type'] = 'application/json';
@@ -499,7 +507,7 @@ class OnlineTtsClient {
         '</voice></speak>';
     final ssmlMsg =
         'X-RequestId:$reqId\r\nContent-Type:application/ssml+xml\r\n'
-        'X-Timestamp:${timestamp}Z\r\nPath:ssml\r\n\r\n$ssml';
+        'X-Timestamp:$timestamp\r\nPath:ssml\r\n\r\n$ssml';
     ws.add(ssmlMsg);
 
     try {
@@ -516,6 +524,7 @@ class OnlineTtsClient {
     required String voice,
     required double rate,
     required double pitch,
+    bool encodeForUrl = true,
   }) {
     final rateStr = rate.toStringAsFixed(2);
     final ratePct = _formatSignedPct((rate - 1.0) * 100);
@@ -524,8 +533,11 @@ class OnlineTtsClient {
     return template
         .replaceAll('{{textEncoded}}', Uri.encodeComponent(text))
         .replaceAll('{{text}}', text)
-        .replaceAll('{{voice}}', Uri.encodeComponent(voice))
-        .replaceAll('{{ratePct}}', Uri.encodeComponent(ratePct))
+        .replaceAll('{{voice}}', encodeForUrl ? Uri.encodeComponent(voice) : voice)
+        .replaceAll(
+          '{{ratePct}}',
+          encodeForUrl ? Uri.encodeComponent(ratePct) : ratePct,
+        )
         .replaceAll('{{rate}}', rateStr)
         .replaceAll('{{pitch}}', pitchStr)
         .replaceAll('{{speakSpeed}}', speakSpeed);
@@ -542,8 +554,11 @@ class OnlineTtsClient {
   }
 
   static String _randomHex32() {
-    final now = DateTime.now().microsecondsSinceEpoch.toString();
-    return md5.convert(utf8.encode(now)).toString();
+    _seq = (_seq + 1) & 0xFFFFFFFF;
+    final a = _rng.nextInt(0x10000000);
+    final b = _rng.nextInt(0x10000000);
+    final c = DateTime.now().microsecondsSinceEpoch ^ _seq;
+    return md5.convert(utf8.encode('$a:$b:$c:$_seq')).toString();
   }
 
   static String _resolveFileExt(String format) {

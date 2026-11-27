@@ -43,6 +43,7 @@ class TtsPlaybackController extends ChangeNotifier {
   DateTime? _sleepEndAt;
   Timer? _sleepTicker;
   bool _disposed = false;
+  bool _hasLoadedAudio = false;
 
   void _safeNotify() {
     if (!_disposed) {
@@ -53,7 +54,7 @@ class TtsPlaybackController extends ChangeNotifier {
   BookReaderSettings _readerSettings = const BookReaderSettings();
   TtsConfigState _ttsConfig = const TtsConfigState();
 
-  final Map<int, Future<File>> _prefetchFutures = {};
+  final Map<int, Future<({File? file, Object? error})>> _prefetchFutures = {};
 
   VoidCallback? onPageCompleted;
   void Function(String code)? onFallbackNotice;
@@ -132,6 +133,7 @@ class TtsPlaybackController extends ChangeNotifier {
     _chunkIndex = 0;
     _excerptOnly = excerptOnly;
     _usingFallbackLocal = false;
+    _hasLoadedAudio = false;
     _activeUtteranceId = null;
     _activePlaybackId = null;
     await _platform.stopTts();
@@ -146,8 +148,14 @@ class TtsPlaybackController extends ChangeNotifier {
             _status != TtsPlaybackStatus.loading)) {
       return;
     }
+    final wasLoading = _status == TtsPlaybackStatus.loading;
     _status = TtsPlaybackStatus.paused;
-    if (_useOnline) {
+    if (wasLoading) {
+      _sessionToken++;
+      _activePlaybackId = null;
+      _hasLoadedAudio = false;
+      _prefetchFutures.clear();
+    } else if (_useOnline) {
       await _platform.pauseAudio();
     } else {
       _activeUtteranceId = null;
@@ -160,7 +168,7 @@ class TtsPlaybackController extends ChangeNotifier {
     if (_disposed || _status != TtsPlaybackStatus.paused || _chunks.isEmpty) {
       return;
     }
-    if (_useOnline) {
+    if (_useOnline && _hasLoadedAudio) {
       _status = TtsPlaybackStatus.playing;
       await _platform.resumeAudio();
       _safeNotify();
@@ -210,6 +218,7 @@ class TtsPlaybackController extends ChangeNotifier {
     _chunkIndex = 0;
     _excerptOnly = false;
     _usingFallbackLocal = false;
+    _hasLoadedAudio = false;
     _status = TtsPlaybackStatus.idle;
     await _platform.stopTts();
     await _platform.stopAudio();
@@ -227,6 +236,7 @@ class TtsPlaybackController extends ChangeNotifier {
       return false;
     }
     _chunkIndex = idx;
+    _hasLoadedAudio = false;
     final chunk = _chunks[idx];
 
     if (_useOnline) {
@@ -239,9 +249,14 @@ class TtsPlaybackController extends ChangeNotifier {
       OnlineTtsException? failure;
       for (var attempt = 0; attempt < 2; attempt++) {
         try {
-          final fut = _prefetchFutures.remove(idx) ??
-              _synthesizeOnline(chunk.text);
-          audioFile = await fut;
+          final prefetched = _prefetchFutures.remove(idx);
+          if (prefetched != null) {
+            final res = await prefetched;
+            if (res.error != null) throw res.error!;
+            audioFile = res.file;
+          } else {
+            audioFile = await _synthesizeOnline(chunk.text);
+          }
           if (_disposed || token != _sessionToken) return false;
           failure = null;
           break;
@@ -272,7 +287,10 @@ class TtsPlaybackController extends ChangeNotifier {
           playbackId: pid,
         );
         if (_disposed) return false;
-        if (started && token == _sessionToken) return true;
+        if (started && token == _sessionToken) {
+          _hasLoadedAudio = true;
+          return true;
+        }
         failure = const OnlineTtsException('ERR_TTS_SPEAK_FAILED');
       }
 
@@ -280,6 +298,7 @@ class TtsPlaybackController extends ChangeNotifier {
         _usingFallbackLocal = true;
         onFallbackNotice?.call(failure?.code ?? 'ERR_UNKNOWN');
       } else {
+        _hasLoadedAudio = false;
         _status = TtsPlaybackStatus.paused;
         onErrorNotice?.call(failure?.code ?? 'ERR_UNKNOWN');
         _safeNotify();
@@ -321,8 +340,10 @@ class TtsPlaybackController extends ChangeNotifier {
   void _schedulePrefetch(int idx, int token) {
     if (token != _sessionToken || idx < 0 || idx >= _chunks.length) return;
     if (_prefetchFutures.containsKey(idx)) return;
-    _prefetchFutures[idx] = _synthesizeOnline(_chunks[idx].text).catchError(
-      (Object err) => throw err,
+    _prefetchFutures[idx] = _synthesizeOnline(_chunks[idx].text)
+        .then<({File? file, Object? error})>(
+      (f) => (file: f, error: null),
+      onError: (Object err) => (file: null, error: err),
     );
   }
 
@@ -359,6 +380,7 @@ class TtsPlaybackController extends ChangeNotifier {
       if (_activePlaybackId != null && pid.isNotEmpty && pid != _activePlaybackId) {
         return;
       }
+      _hasLoadedAudio = false;
       if (ev.type == 'audio_error') {
         if (_ttsConfig.fallbackToLocalTts) {
           _usingFallbackLocal = true;

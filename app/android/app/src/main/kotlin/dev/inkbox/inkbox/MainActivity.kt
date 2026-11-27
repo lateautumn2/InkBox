@@ -74,20 +74,15 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         ttsInitializing = true
-        var initSyncFired = false
-        var initSyncStatus = TextToSpeech.ERROR
-        val created = TextToSpeech(this) { status ->
-            if (tts == null) {
-                initSyncFired = true
-                initSyncStatus = status
-            } else {
-                onInit(status)
+        var createdRef: TextToSpeech? = null
+        createdRef = TextToSpeech(this) { status ->
+            mainHandler.post {
+                if (tts === createdRef) {
+                    onInit(status)
+                }
             }
         }
-        tts = created
-        if (initSyncFired) {
-            onInit(initSyncStatus)
-        }
+        tts = createdRef
         if (intent?.action == Intent.ACTION_VIEW && intent.data != null) {
             pendingIncomingUri = intent.data
         }
@@ -385,25 +380,20 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             pendingSpeakTimeout = watchdog
                             mainHandler.postDelayed(watchdog, 5000L)
 
-                            var syncFired = false
-                            var syncStatus = TextToSpeech.ERROR
+                            var createdRef: TextToSpeech? = null
                             val initCb = TextToSpeech.OnInitListener { st ->
-                                if (tts == null) {
-                                    syncFired = true
-                                    syncStatus = st
-                                } else {
-                                    onInit(st)
+                                mainHandler.post {
+                                    if (tts === createdRef) {
+                                        onInit(st)
+                                    }
                                 }
                             }
-                            val created = if (requestedEngine.isEmpty()) {
+                            createdRef = if (requestedEngine.isEmpty()) {
                                 TextToSpeech(this, initCb)
                             } else {
                                 TextToSpeech(this, initCb, requestedEngine)
                             }
-                            tts = created
-                            if (syncFired) {
-                                onInit(syncStatus)
-                            }
+                            tts = createdRef
                         } else if (ttsInitializing) {
                             var responded = false
                             val watchdog = Runnable {
@@ -484,42 +474,77 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                     }
 
                     "getTtsVoices" -> {
+                        val requestedEngine = call.argument<String>("engine")?.trim() ?: ""
                         val langFilter = call.argument<String>("language")?.trim() ?: ""
-                        val voices = try {
-                            tts?.voices?.toList() ?: emptyList()
-                        } catch (_: Exception) {
-                            emptyList()
-                        }
-                        val langPrefix = if (langFilter.isEmpty() || langFilter == "system") {
-                            ""
-                        } else {
-                            langFilter.split('-', '_').firstOrNull()?.lowercase(Locale.ROOT) ?: ""
-                        }
-                        val filtered = if (langPrefix.isEmpty()) {
-                            voices
-                        } else {
-                            val matched = voices.filter {
-                                it.locale.language.lowercase(Locale.ROOT) == langPrefix
+                        if ((requestedEngine.isEmpty() || requestedEngine == currentTtsEngine) &&
+                            ttsReady &&
+                            tts != null
+                        ) {
+                            val voices = try {
+                                tts?.voices?.toList() ?: emptyList()
+                            } catch (_: Exception) {
+                                emptyList()
                             }
-                            matched.ifEmpty { voices }
-                        }
-                        val sorted = filtered.sortedWith(
-                            compareBy<android.speech.tts.Voice>(
-                                { it.isNetworkConnectionRequired },
-                                { -(it.quality) },
-                                { it.name }
-                            )
-                        )
-                        result.success(
-                            sorted.map { v ->
-                                mapOf(
-                                    "name" to v.name,
-                                    "locale" to v.locale.toLanguageTag(),
-                                    "quality" to v.quality,
-                                    "requiresNetwork" to v.isNetworkConnectionRequired
-                                )
+                            result.success(formatVoices(voices, langFilter))
+                        } else {
+                            var tempTts: TextToSpeech? = null
+                            var replied = false
+                            val watchdog = Runnable {
+                                if (!replied) {
+                                    replied = true
+                                    try {
+                                        tempTts?.shutdown()
+                                    } catch (_: Exception) {
+                                    }
+                                    tempTts = null
+                                    result.success(emptyList<Map<String, Any>>())
+                                }
                             }
-                        )
+                            mainHandler.postDelayed(watchdog, 3000L)
+                            val probeListener = TextToSpeech.OnInitListener { status ->
+                                mainHandler.post {
+                                    mainHandler.removeCallbacks(watchdog)
+                                    if (!replied) {
+                                        replied = true
+                                        val raw = if (status == TextToSpeech.SUCCESS) {
+                                            try {
+                                                tempTts?.voices?.toList() ?: emptyList()
+                                            } catch (_: Exception) {
+                                                emptyList()
+                                            }
+                                        } else {
+                                            emptyList()
+                                        }
+                                        try {
+                                            tempTts?.shutdown()
+                                        } catch (_: Exception) {
+                                        }
+                                        tempTts = null
+                                        result.success(formatVoices(raw, langFilter))
+                                    } else {
+                                        try {
+                                            tempTts?.shutdown()
+                                        } catch (_: Exception) {
+                                        }
+                                        tempTts = null
+                                    }
+                                }
+                            }
+                            tempTts = try {
+                                if (requestedEngine.isEmpty()) {
+                                    TextToSpeech(this, probeListener)
+                                } else {
+                                    TextToSpeech(this, probeListener, requestedEngine)
+                                }
+                            } catch (_: Exception) {
+                                mainHandler.removeCallbacks(watchdog)
+                                if (!replied) {
+                                    replied = true
+                                    result.success(emptyList<Map<String, Any>>())
+                                }
+                                null
+                            }
+                        }
                     }
 
                     "playAudioFile" -> {
@@ -544,16 +569,16 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             mp.setDataSource(file.absolutePath)
                             mp.prepare()
                             mp.setOnCompletionListener {
-                                val pid = activeAudioPlaybackId ?: playbackId
+                                if (mediaPlayer !== mp) return@setOnCompletionListener
                                 releaseMediaPlayer(abandonFocus = true)
-                                emitEvent("audio_done", mapOf("playbackId" to pid))
+                                emitEvent("audio_done", mapOf("playbackId" to playbackId))
                             }
                             mp.setOnErrorListener { _, what, extra ->
-                                val pid = activeAudioPlaybackId ?: playbackId
+                                if (mediaPlayer !== mp) return@setOnErrorListener true
                                 releaseMediaPlayer(abandonFocus = true)
                                 emitEvent(
                                     "audio_error",
-                                    mapOf("playbackId" to pid, "what" to what, "extra" to extra)
+                                    mapOf("playbackId" to playbackId, "what" to what, "extra" to extra)
                                 )
                                 true
                             }
@@ -1030,6 +1055,40 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
         } else {
             @Suppress("DEPRECATION")
             am.abandonAudioFocus(null)
+        }
+    }
+
+    private fun formatVoices(
+        rawVoices: Collection<android.speech.tts.Voice>,
+        langFilter: String
+    ): List<Map<String, Any>> {
+        val langPrefix = if (langFilter.isEmpty() || langFilter == "system") {
+            ""
+        } else {
+            langFilter.split('-', '_').firstOrNull()?.lowercase(Locale.ROOT) ?: ""
+        }
+        val filtered = if (langPrefix.isEmpty()) {
+            rawVoices.toList()
+        } else {
+            val matched = rawVoices.filter {
+                it.locale.language.lowercase(Locale.ROOT) == langPrefix
+            }
+            matched.ifEmpty { rawVoices.toList() }
+        }
+        val sorted = filtered.sortedWith(
+            compareBy<android.speech.tts.Voice>(
+                { it.isNetworkConnectionRequired },
+                { -(it.quality) },
+                { it.name }
+            )
+        )
+        return sorted.map { v ->
+            mapOf(
+                "name" to v.name,
+                "locale" to v.locale.toLanguageTag(),
+                "quality" to v.quality,
+                "requiresNetwork" to v.isNetworkConnectionRequired
+            )
         }
     }
 

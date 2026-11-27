@@ -1704,5 +1704,8 @@ class AppLocalizationsEn extends AppLocalizations {
   String get errInvalidAudio => 'Server did not return valid audio';
 
   @override
+  String get errInvalidJson => 'Invalid JSON format';
+
+  @override
   String get errUnknown => 'Operation failed';
 }

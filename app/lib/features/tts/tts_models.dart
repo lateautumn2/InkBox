@@ -333,6 +333,7 @@ class TtsConfigState {
     this.secrets = const {},
     this.fallbackToLocalTts = true,
     this.sleepAtChapterEnd = false,
+    this.hydrated = false,
   });
 
   final TtsEngineMode mode;
@@ -341,6 +342,7 @@ class TtsConfigState {
   final Map<String, String> secrets; // Kept in memory + Keystore, never serialized
   final bool fallbackToLocalTts;
   final bool sleepAtChapterEnd;
+  final bool hydrated;
 
   List<OnlineTtsProfile> get effectiveProfiles =>
       profiles.isEmpty ? OnlineTtsProfile.defaultPresets() : profiles;
@@ -359,6 +361,7 @@ class TtsConfigState {
     Map<String, String>? secrets,
     bool? fallbackToLocalTts,
     bool? sleepAtChapterEnd,
+    bool? hydrated,
   }) {
     return TtsConfigState(
       mode: mode ?? this.mode,
@@ -367,6 +370,7 @@ class TtsConfigState {
       secrets: secrets ?? this.secrets,
       fallbackToLocalTts: fallbackToLocalTts ?? this.fallbackToLocalTts,
       sleepAtChapterEnd: sleepAtChapterEnd ?? this.sleepAtChapterEnd,
+      hydrated: hydrated ?? this.hydrated,
     );
   }
 
@@ -381,9 +385,11 @@ class TtsConfigState {
 
 class TtsConfigController extends Notifier<TtsConfigState> {
   static const _kKey = 'inkbox_tts_config_v2';
+  bool _userMutated = false;
 
   @override
   TtsConfigState build() {
+    _userMutated = false;
     _hydrate();
     return TtsConfigState(profiles: OnlineTtsProfile.defaultPresets());
   }
@@ -423,6 +429,11 @@ class TtsConfigController extends Notifier<TtsConfigState> {
         }
       }
 
+      if (_userMutated) {
+        state = state.copyWith(hydrated: true);
+        return;
+      }
+
       state = TtsConfigState(
         mode: mode,
         activeProfileId: activeId,
@@ -430,8 +441,11 @@ class TtsConfigController extends Notifier<TtsConfigState> {
         secrets: secrets,
         fallbackToLocalTts: fallback,
         sleepAtChapterEnd: chapterEnd,
+        hydrated: true,
       );
-    } catch (_) {}
+    } catch (_) {
+      state = state.copyWith(hydrated: true);
+    }
   }
 
   Future<void> _persist() async {
@@ -442,22 +456,26 @@ class TtsConfigController extends Notifier<TtsConfigState> {
   }
 
   Future<void> setMode(TtsEngineMode mode) async {
-    state = state.copyWith(mode: mode);
+    _userMutated = true;
+    state = state.copyWith(mode: mode, hydrated: true);
     await _persist();
   }
 
   Future<void> setActiveProfile(String profileId) async {
-    state = state.copyWith(activeProfileId: profileId);
+    _userMutated = true;
+    state = state.copyWith(activeProfileId: profileId, hydrated: true);
     await _persist();
   }
 
   Future<void> setFallbackToLocalTts(bool value) async {
-    state = state.copyWith(fallbackToLocalTts: value);
+    _userMutated = true;
+    state = state.copyWith(fallbackToLocalTts: value, hydrated: true);
     await _persist();
   }
 
   Future<void> setSleepAtChapterEnd(bool value) async {
-    state = state.copyWith(sleepAtChapterEnd: value);
+    _userMutated = true;
+    state = state.copyWith(sleepAtChapterEnd: value, hydrated: true);
     await _persist();
   }
 
@@ -466,6 +484,7 @@ class TtsConfigController extends Notifier<TtsConfigState> {
     String? apiKey,
     bool activate = true,
   }) async {
+    _userMutated = true;
     final list = [...state.effectiveProfiles];
     final idx = list.indexWhere((p) => p.id == profile.id);
     if (idx >= 0) {
@@ -490,11 +509,13 @@ class TtsConfigController extends Notifier<TtsConfigState> {
       profiles: list,
       secrets: nextSecrets,
       activeProfileId: activate ? profile.id : state.activeProfileId,
+      hydrated: true,
     );
     await _persist();
   }
 
   Future<void> deleteProfile(String profileId) async {
+    _userMutated = true;
     final list = state.effectiveProfiles
         .where((p) => p.id != profileId)
         .toList();
@@ -509,11 +530,13 @@ class TtsConfigController extends Notifier<TtsConfigState> {
       profiles: safeList,
       secrets: nextSecrets,
       activeProfileId: nextActive,
+      hydrated: true,
     );
     await _persist();
   }
 
   Future<void> resetAll() async {
+    _userMutated = true;
     for (final p in state.effectiveProfiles) {
       await ref.read(platformBridgeProvider).deleteSecret('tts_secret_${p.id}');
     }
@@ -521,6 +544,7 @@ class TtsConfigController extends Notifier<TtsConfigState> {
       mode: TtsEngineMode.local,
       profiles: OnlineTtsProfile.defaultPresets(),
       activeProfileId: 'edge_default',
+      hydrated: true,
     );
     await _persist();
   }

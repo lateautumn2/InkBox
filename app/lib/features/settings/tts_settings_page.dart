@@ -55,6 +55,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   late final PlatformBridge _platform;
 
   String? _loadedProfileId;
+  bool _syncedAfterHydrate = false;
   late final TextEditingController _nameCtrl = TextEditingController();
   late final TextEditingController _endpointCtrl = TextEditingController();
   late final TextEditingController _apiKeyCtrl = TextEditingController();
@@ -163,7 +164,9 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
 
   void _syncProfileForm(TtsConfigState cfg, {bool force = false}) {
     final profile = cfg.activeProfile;
-    if (!force && _loadedProfileId == profile.id) return;
+    final shouldHydrateSync = cfg.hydrated && !_syncedAfterHydrate;
+    if (!force && !shouldHydrateSync && _loadedProfileId == profile.id) return;
+    if (cfg.hydrated) _syncedAfterHydrate = true;
     _loadedProfileId = profile.id;
     _selectedKind = profile.kind;
     _edgeUseGateway = profile.edgeUseGateway;
@@ -206,16 +209,25 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     _loadedProfileId = updated.id;
   }
 
+  Future<void> _stopActivePreview() async {
+    _activePreviewUtteranceId = null;
+    _activePreviewPlaybackId = null;
+    await _platform.stopTts();
+    await _platform.stopAudio();
+    if (mounted && _previewPlaying) {
+      setState(() => _previewPlaying = false);
+    }
+  }
+
   Future<void> _toggleLocalPreview(BookReaderSettings settings) async {
     final l10n = context.l10n;
-    final platform = ref.read(platformBridgeProvider);
+    final platform = _platform;
     if (_previewPlaying) {
-      _activePreviewUtteranceId = null;
-      await platform.stopTts();
-      if (mounted) setState(() => _previewPlaying = false);
+      await _stopActivePreview();
       return;
     }
 
+    await platform.stopAudio();
     final appLocale = ref.read(appearanceProvider).appLocaleCode;
     final sample = ttsPreviewSampleText(settings.ttsLanguage, appLocale);
 
@@ -245,14 +257,13 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
 
   Future<void> _testAndPreviewOnline(BookReaderSettings settings) async {
     final l10n = context.l10n;
-    final platform = ref.read(platformBridgeProvider);
+    final platform = _platform;
     if (_previewPlaying) {
-      _activePreviewPlaybackId = null;
-      await platform.stopAudio();
-      if (mounted) setState(() => _previewPlaying = false);
+      await _stopActivePreview();
       return;
     }
 
+    await platform.stopTts();
     await _saveCurrentProfile();
     if (!mounted) return;
 
@@ -413,7 +424,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     if (raw == null || raw.trim().isEmpty || !mounted) return;
     final imported = parseLegadoHttpTtsJson(raw);
     if (imported.isEmpty) {
-      _toast(l10n.errInvalidAudio);
+      _toast(l10n.errInvalidJson);
       return;
     }
     final ctrl = ref.read(ttsConfigProvider.notifier);
@@ -481,7 +492,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                           (s) => s.copyWith(
                             ttsRate: 1.0,
                             ttsPitch: 1.0,
-                            ttsLanguage: 'zh-CN',
+                            ttsLanguage: 'system',
                             ttsEngine: '',
                             ttsVoice: '',
                             ttsAutoTurnPage: true,
@@ -518,7 +529,12 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                             child: _ModeTabButton(
                               label: l10n.ttsModeLocal,
                               selected: !isOnline,
-                              onTap: () => ttsCfgCtrl.setMode(TtsEngineMode.local),
+                              onTap: () async {
+                                if (_previewPlaying) {
+                                  await _stopActivePreview();
+                                }
+                                await ttsCfgCtrl.setMode(TtsEngineMode.local);
+                              },
                             ),
                           ),
                           const SizedBox(width: 8),
@@ -526,7 +542,12 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                             child: _ModeTabButton(
                               label: l10n.ttsModeOnline,
                               selected: isOnline,
-                              onTap: () => ttsCfgCtrl.setMode(TtsEngineMode.online),
+                              onTap: () async {
+                                if (_previewPlaying) {
+                                  await _stopActivePreview();
+                                }
+                                await ttsCfgCtrl.setMode(TtsEngineMode.online);
+                              },
                             ),
                           ),
                         ],

@@ -908,5 +908,6 @@
   "errHttp403": "访问被拒绝 (403)",
   "errHttpStatus": "服务端返回错误状态",
   "errInvalidAudio": "服务返回的不是有效音频",
+  "errInvalidJson": "JSON 格式无效",
   "errUnknown": "操作失败"
 }

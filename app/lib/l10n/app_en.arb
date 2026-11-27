@@ -510,5 +510,6 @@
   "errHttp403": "Access forbidden (403)",
   "errHttpStatus": "Server returned an error status",
   "errInvalidAudio": "Server did not return valid audio",
+  "errInvalidJson": "Invalid JSON format",
   "errUnknown": "Operation failed"
 }

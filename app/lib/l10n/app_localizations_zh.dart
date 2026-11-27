@@ -1696,5 +1696,8 @@ class AppLocalizationsZh extends AppLocalizations {
   String get errInvalidAudio => '服务返回的不是有效音频';
 
   @override
+  String get errInvalidJson => 'JSON 格式无效';
+
+  @override
   String get errUnknown => '操作失败';
 }

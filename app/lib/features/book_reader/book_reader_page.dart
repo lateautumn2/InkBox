@@ -705,7 +705,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     }
   }
 
-  void _commitTurnNext({bool fromTtsAutoTurn = false}) {
+  void _commitTurnNext() {
     final nextIdx = _pageIdx + _pageStep;
     if (_pages.isNotEmpty && nextIdx < _pages.length) {
       setState(() {
@@ -717,7 +717,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         _inspectedAnnotation = null;
       });
       _persistProgress();
-      if (_ttsPlaying && !_ttsExcerptOnly && !fromTtsAutoTurn) {
+      if (_ttsPlaying && !_ttsExcerptOnly) {
         unawaited(_speakCurrentPage());
       }
       return;
@@ -745,7 +745,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         });
         _persistProgress();
         unawaited(_preloadAdjacentChapters(gen));
-        if (_ttsPlaying && !_ttsExcerptOnly && !fromTtsAutoTurn) {
+        if (_ttsPlaying && !_ttsExcerptOnly) {
           unawaited(_speakCurrentPage());
         }
       } else {
@@ -1316,8 +1316,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     if (isScroll) {
       unawaited(_advanceScrollTts(curSettings));
     } else if (curSettings.ttsAutoTurnPage && _canTurnNext) {
-      _commitTurnNext(fromTtsAutoTurn: true);
-      unawaited(_speakCurrentPage());
+      _commitTurnNext();
     } else {
       unawaited(_stopTtsPlayback());
     }
@@ -3268,52 +3267,63 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                 }).toList(),
               ),
             ),
-            InkSwitch(
-              value: settings.indentFirstLine,
-              onChanged: (v) =>
-                  ctrl.update((s) => s.copyWith(indentFirstLine: v)),
-            ),
-            const SizedBox(width: 4),
-            Text(
-              l10n.firstLineIndentLabel,
-              style: TextStyle(fontSize: 11, color: tokens.inkMuted),
-            ),
           ],
         ),
-        const SizedBox(height: 8),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: BookPaperTheme.values.map((t) {
-            final active = settings.paperTheme == t;
-            return GestureDetector(
-              onTap: () {
-                if (t != BookPaperTheme.dark && t != BookPaperTheme.oled) {
-                  _lastLightPaper = t;
-                }
-                ctrl.update((s) => s.copyWith(paperTheme: t));
-              },
-              child: Container(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                decoration: BoxDecoration(
-                  color: t.background,
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: active ? tokens.accentPrimary : tokens.subtleBorder,
-                    width: active ? 2 : 1,
-                  ),
-                ),
-                child: Text(
-                  t.labelOf(l10n),
-                  style: TextStyle(
-                    fontSize: 11,
-                    fontWeight: FontWeight.w600,
-                    color: t.foreground,
-                  ),
-                ),
+        Padding(
+          padding: const EdgeInsets.only(top: 6),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text(
+                l10n.firstLineIndentLabel,
+                style: TextStyle(fontSize: 12, color: tokens.inkMuted),
               ),
-            );
-          }).toList(),
+              InkSwitch(
+                value: settings.indentFirstLine,
+                onChanged: (v) =>
+                    ctrl.update((s) => s.copyWith(indentFirstLine: v)),
+              ),
+            ],
+          ),
+        ),
+        const SizedBox(height: 8),
+        Align(
+          alignment: Alignment.centerLeft,
+          child: Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: BookPaperTheme.values.map((t) {
+              final active = settings.paperTheme == t;
+              return GestureDetector(
+                onTap: () {
+                  if (t != BookPaperTheme.dark && t != BookPaperTheme.oled) {
+                    _lastLightPaper = t;
+                  }
+                  ctrl.update((s) => s.copyWith(paperTheme: t));
+                },
+                child: Container(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: t.background,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: active ? tokens.accentPrimary : tokens.subtleBorder,
+                      width: active ? 2 : 1,
+                    ),
+                  ),
+                  child: Text(
+                    t.labelOf(l10n),
+                    style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: t.foreground,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
         ),
         const SizedBox(height: 6),
       ],

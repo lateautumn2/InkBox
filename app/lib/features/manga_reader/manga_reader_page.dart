@@ -640,43 +640,61 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
                                   color: Colors.white70,
                                 ),
                               ),
-                              Text(
-                                _mode == MangaReadingMode.rtl
-                                    ? '$_totalPages'
-                                    : '${_currentPage + 1}',
-                                style: const TextStyle(
-                                  fontSize: 11.5,
-                                  color: Colors.white70,
-                                ),
-                              ),
-                              Expanded(
-                                child: Directionality(
-                                  textDirection: _mode == MangaReadingMode.rtl
-                                      ? TextDirection.rtl
-                                      : TextDirection.ltr,
-                                  child: Slider(
-                                    min: 0,
-                                    max: (_totalPages - 1)
-                                        .clamp(1, 9999)
-                                        .toDouble(),
-                                    value: _currentPage
-                                        .clamp(0, (_totalPages - 1).clamp(1, 9999))
-                                        .toDouble(),
-                                    activeColor: InkBoxTheme.slateInkDark,
-                                    onChanged: _totalPages > 1
-                                        ? (v) => _jumpToPage(v.round())
-                                        : null,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                _mode == MangaReadingMode.rtl
-                                    ? '${_currentPage + 1}'
-                                    : '$_totalPages',
-                                style: const TextStyle(
-                                  fontSize: 11.5,
-                                  color: Colors.white70,
-                                ),
+                              Builder(
+                                builder: (_) {
+                                  final isRtlScrubber =
+                                      _mode == MangaReadingMode.rtl ||
+                                          _mode == MangaReadingMode.dual;
+                                  return Expanded(
+                                    child: Row(
+                                      children: [
+                                        Text(
+                                          isRtlScrubber
+                                              ? '$_totalPages'
+                                              : '${_currentPage + 1}',
+                                          style: const TextStyle(
+                                            fontSize: 11.5,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                        Expanded(
+                                          child: Directionality(
+                                            textDirection: isRtlScrubber
+                                                ? TextDirection.rtl
+                                                : TextDirection.ltr,
+                                            child: Slider(
+                                              min: 0,
+                                              max: (_totalPages - 1)
+                                                  .clamp(1, 9999)
+                                                  .toDouble(),
+                                              value: _currentPage
+                                                  .clamp(
+                                                    0,
+                                                    (_totalPages - 1)
+                                                        .clamp(1, 9999),
+                                                  )
+                                                  .toDouble(),
+                                              activeColor:
+                                                  InkBoxTheme.slateInkDark,
+                                              onChanged: _totalPages > 1
+                                                  ? (v) => _jumpToPage(v.round())
+                                                  : null,
+                                            ),
+                                          ),
+                                        ),
+                                        Text(
+                                          isRtlScrubber
+                                              ? '${_currentPage + 1}'
+                                              : '$_totalPages',
+                                          style: const TextStyle(
+                                            fontSize: 11.5,
+                                            color: Colors.white70,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  );
+                                },
                               ),
                               IconButton(
                                 visualDensity: VisualDensity.compact,
@@ -981,8 +999,20 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
             _DarkSwitchRow(
               label: l10n.mangaCoverAlone,
               value: settings.dualPageShift,
-              onChanged: (v) =>
-                  ctrl.update((s) => s.copyWith(dualPageShift: v)),
+              onChanged: (v) {
+                ctrl.update((s) => s.copyWith(dualPageShift: v));
+                if (_effectiveDual &&
+                    _mode != MangaReadingMode.webtoon &&
+                    _pageController.hasClients) {
+                  final newSlots = _slotsFor(
+                    true,
+                    settings.copyWith(dualPageShift: v),
+                  );
+                  _pageController.jumpToPage(
+                    slotIndexForMangaPage(newSlots, _currentPage),
+                  );
+                }
+              },
             ),
             _DarkSwitchRow(
               label: l10n.splitWidePagesLabel,

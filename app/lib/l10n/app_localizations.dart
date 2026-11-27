@@ -3160,6 +3160,12 @@ abstract class AppLocalizations {
   /// **'服务返回的不是有效音频'**
   String get errInvalidAudio;
 
+  /// No description provided for @errInvalidJson.
+  ///
+  /// In zh, this message translates to:
+  /// **'JSON 格式无效'**
+  String get errInvalidJson;
+
   /// No description provided for @errUnknown.
   ///
   /// In zh, this message translates to:
