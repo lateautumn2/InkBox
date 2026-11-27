@@ -1,0 +1,134 @@
+name: Publish Android APK
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  ANDROID_NDK_VERSION: '28.2.13676358'
+  ANDROID_BUILD_TOOLS: '36.0.0'
+  FLUTTER_VERSION: '3.50.1'
+  FLUTTER_SHA256: '33c1e3d4dd08f1136ddb9c7976cfd2b0ab20296f1565b78ba176a4cbb4e140eb'
+
+jobs:
+  build_android:
+    name: Build and sign Android APK
+    runs-on: windows-2025
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@v6.3.0
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Install Flutter
+        run: |
+          $zip = Join-Path $env:RUNNER_TEMP 'flutter.zip'
+          $url = "https://storage.googleapis.com/flutter_infra_release/releases/stable/windows/flutter_windows_$env:FLUTTER_VERSION-stable.zip"
+          curl.exe --fail --location --retry 3 --silent --show-error --output $zip $url
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ((Get-FileHash -Algorithm SHA256 -LiteralPath $zip).Hash -ne $env:FLUTTER_SHA256) {
+            throw 'Flutter SDK checksum mismatch'
+          }
+          tar -xf $zip -C $env:RUNNER_TEMP
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Remove-Item -LiteralPath $zip
+          (Join-Path $env:RUNNER_TEMP 'flutter/bin') >> $env:GITHUB_PATH
+
+      - name: Install Android SDK and NDK
+        run: |
+          & "$env:ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager.bat" --install `
+            'platforms;android-36' "build-tools;$env:ANDROID_BUILD_TOOLS" "ndk;$env:ANDROID_NDK_VERSION"
+
+      - name: Build Rust libraries
+        run: |
+          rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/build_rust_android.ps1 -Release -NdkVersion $env:ANDROID_NDK_VERSION
+
+      - name: Resolve Flutter dependencies
+        working-directory: app
+        run: flutter pub get --enforce-lockfile
+
+      - name: Build and verify universal APK
+        working-directory: app
+        env:
+          INKBOX_ANDROID_KEYSTORE: ${{ secrets.INKBOX_ANDROID_KEYSTORE }}
+          INKBOX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.INKBOX_ANDROID_KEYSTORE_PASSWORD }}
+        run: |
+          if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$') {
+            throw 'Expected a vMAJOR.MINOR.PATCH tag with up to three digits per component'
+          }
+          $versionName = $env:GITHUB_REF_NAME.Substring(1)
+          $versionCode = [int]$Matches[1] * 1000000 + [int]$Matches[2] * 1000 + [int]$Matches[3]
+          if ($versionCode -lt 1) { throw 'Android versionCode must be positive' }
+          if (-not $env:INKBOX_ANDROID_KEYSTORE -or -not $env:INKBOX_ANDROID_KEYSTORE_PASSWORD) {
+            throw 'Configure the InkBox Android signing secrets before publishing'
+          }
+          $env:INKBOX_ANDROID_KEYSTORE_PATH = Join-Path $env:RUNNER_TEMP 'inkbox-signing.p12'
+          [IO.File]::WriteAllBytes($env:INKBOX_ANDROID_KEYSTORE_PATH, [Convert]::FromBase64String($env:INKBOX_ANDROID_KEYSTORE))
+          Remove-Item Env:INKBOX_ANDROID_KEYSTORE
+          try {
+            flutter build apk --release --no-pub --target-platform android-arm,android-arm64,android-x64 `
+              --build-name $versionName --build-number $versionCode
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $apk = 'build/app/outputs/flutter-apk/app-release.apk'
+            & "$env:ANDROID_HOME/build-tools/$env:ANDROID_BUILD_TOOLS/apksigner.bat" verify $apk
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $entries = tar -tf $apk
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            foreach ($abi in @('arm64-v8a', 'armeabi-v7a', 'x86_64')) {
+              if ($entries -notcontains "lib/$abi/libinkbox_core.so") {
+                throw "Missing InkBox native library for $abi"
+              }
+            }
+            New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/release" | Out-Null
+            Copy-Item -LiteralPath $apk -Destination "$env:RUNNER_TEMP/release/InkBox-$env:GITHUB_REF_NAME-android.apk"
+          } finally {
+            Remove-Item -LiteralPath $env:INKBOX_ANDROID_KEYSTORE_PATH
+          }
+
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: android-apk
+          path: ${{ runner.temp }}/release/*.apk
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Upload APK to GitHub Release
+    needs: build_android
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8.0.2
+        with:
+          name: android-apk
+          path: release
+
+      - name: Publish release asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          apk="release/InkBox-$GITHUB_REF_NAME-android.apk"
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "$apk" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$GITHUB_REF_NAME" "$apk" --verify-tag --generate-notes \
+              --title "InkBox $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+          fi

@@ -1,7 +1,7 @@
 name: inkbox
 description: "墨匣 (InkBox) — 本地书籍与漫画阅读器（Android 首发，面向五端架构）"
 publish_to: 'none'
-version: 1.0.0+1
+version: 0.0.3+3
 
 environment:
   sdk: ^3.14.0

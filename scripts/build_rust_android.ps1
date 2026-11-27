@@ -1,5 +1,6 @@
 param(
-    [switch]$Release
+    [switch]$Release,
+    [string]$NdkVersion = '28.2.13676358'
 )
 $ErrorActionPreference = 'Stop'
 
@@ -8,11 +9,11 @@ $rustDir = Join-Path $repoRoot 'rust_core'
 $jniLibs = Join-Path $repoRoot 'app\android\app\src\main\jniLibs'
 
 $sdkRoot = if ($env:ANDROID_HOME) { $env:ANDROID_HOME } elseif (Test-Path 'E:\Android\Sdk') { 'E:\Android\Sdk' } else { "$env:LOCALAPPDATA\Android\Sdk" }
-$ndkDir = Get-ChildItem (Join-Path $sdkRoot 'ndk') -Directory | Sort-Object Name -Descending | Select-Object -First 1
-if (-not $ndkDir) {
-    throw "Android NDK not found under $sdkRoot\ndk"
+$ndkDir = Join-Path $sdkRoot "ndk\$NdkVersion"
+if (-not (Test-Path -LiteralPath $ndkDir -PathType Container)) {
+    throw "Android NDK $NdkVersion not found under $sdkRoot\ndk"
 }
-$llvmBin = Join-Path $ndkDir.FullName 'toolchains\llvm\prebuilt\windows-x86_64\bin'
+$llvmBin = Join-Path $ndkDir 'toolchains\llvm\prebuilt\windows-x86_64\bin'
 Write-Host "Using NDK LLVM toolchain: $llvmBin"
 
 $cargo = Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe'
@@ -30,7 +31,7 @@ try {
         $linkerPath = Join-Path $llvmBin $t.Linker
         Set-Item -Path "Env:$($t.EnvKey)" -Value $linkerPath
         $env:AR = Join-Path $llvmBin 'llvm-ar.exe'
-        $args = @('build', '--target', $t.Triple)
+        $args = @('build', '--locked', '--target', $t.Triple)
         if ($Release) { $args += '--release' }
         Write-Host "Building $($t.Triple) ($profileDir)..."
         & $cargo @args

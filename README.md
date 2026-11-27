@@ -1,7 +1,9 @@
-# 墨匣（InkBox）— 本地书籍与漫画双引擎阅读器（v0.0.2）
+# 墨匣（InkBox）— 本地书籍与漫画双引擎阅读器
 
 墨匣（InkBox）是一款基于 **Flutter + Rust Core（C-ABI FFI）+ 极薄 PlatformBridge** 构建的本地书籍与漫画双引擎阅读器。  
-项目以 **Android** 作为首个落地平台（当前基线 `v0.0.2`），整体架构面向 **Android → iOS → Windows → HarmonyOS NEXT → macOS** 五端平滑演进。
+项目以 **Android** 作为首个落地平台，整体架构面向 **Android → iOS → Windows → HarmonyOS NEXT → macOS** 五端演进。
+
+Android 安装包可从 [GitHub Releases](https://github.com/lateautumn2/InkBox/releases/latest) 下载。每次推送 `vMAJOR.MINOR.PATCH` 标签后，GitHub Actions 会生成并上传一个通用 APK。
 
 ## 设计与架构文档
 
@@ -11,7 +13,7 @@
 - **高保真 UI 设计图**：[docs/design/mockups/](./docs/design/mockups/)（含 `05_floating_card_handdrawn_icons.jpg` FloatingCard 与手绘单色线性图标规范）
 - **技术选型与五端架构**：[docs/architecture/tech_selection.md](./docs/architecture/tech_selection.md)
 
-## 核心能力总览（v0.0.2）
+## 核心能力总览
 
 | 模块 | 已实现功能 |
 | :--- | :--- |

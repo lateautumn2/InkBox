@@ -29,11 +29,22 @@ android {
         versionName = flutter.versionName
     }
 
+    val releaseKeystorePath = providers.environmentVariable("INKBOX_ANDROID_KEYSTORE_PATH").orNull
+    val releaseSigning = if (releaseKeystorePath != null) {
+        signingConfigs.create("release") {
+            storeFile = file(releaseKeystorePath)
+            storeType = "PKCS12"
+            storePassword = providers.environmentVariable("INKBOX_ANDROID_KEYSTORE_PASSWORD").get()
+            keyAlias = "inkbox"
+            keyPassword = storePassword
+        }
+    } else {
+        signingConfigs.getByName("debug")
+    }
+
     buildTypes {
         release {
-            // TODO: Add your own signing config for the release build.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = releaseSigning
         }
     }
 }
