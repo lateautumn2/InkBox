@@ -69,6 +69,7 @@ abstract class PlatformBridge {
   Future<void> setKeepScreenOn(bool enabled);
   Future<void> setVolumeKeyPaging(bool enabled);
   Future<void> setScreenBrightness(double? brightness);
+  Future<double?> getScreenBrightness() async => null;
   Future<String?> speakText(
     String text, {
     double rate = 1.0,
@@ -231,6 +232,16 @@ class MethodChannelPlatformBridge implements PlatformBridge {
         {'brightness': brightness},
       );
     } on MissingPluginException {}
+  }
+
+  @override
+  Future<double?> getScreenBrightness() async {
+    try {
+      final raw = await _channel.invokeMethod<num>('getScreenBrightness');
+      return raw?.toDouble().clamp(0.02, 1.0);
+    } on MissingPluginException {
+      return null;
+    }
   }
 
   @override

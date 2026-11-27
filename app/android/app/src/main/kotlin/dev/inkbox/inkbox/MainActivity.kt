@@ -269,6 +269,25 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                         result.success(null)
                     }
 
+                    "getScreenBrightness" -> {
+                        val cur = window.attributes.screenBrightness
+                        val normalized = if (cur >= 0f) {
+                            cur.toDouble().coerceIn(0.02, 1.0)
+                        } else {
+                            val raw = try {
+                                Settings.System.getInt(
+                                    contentResolver,
+                                    Settings.System.SCREEN_BRIGHTNESS,
+                                    128
+                                )
+                            } catch (_: Exception) {
+                                128
+                            }
+                            (raw / 255.0).coerceIn(0.05, 1.0)
+                        }
+                        result.success(normalized)
+                    }
+
                     "pickDocuments", "pickDocumentsDetailed" -> {
                         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)

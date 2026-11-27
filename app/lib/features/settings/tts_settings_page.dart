@@ -58,6 +58,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   bool _syncedAfterHydrate = false;
   late final TextEditingController _nameCtrl = TextEditingController();
   late final TextEditingController _endpointCtrl = TextEditingController();
+  late final TextEditingController _azureRegionCtrl = TextEditingController();
   late final TextEditingController _apiKeyCtrl = TextEditingController();
   late final TextEditingController _modelCtrl = TextEditingController();
   late final TextEditingController _voiceCtrl = TextEditingController();
@@ -65,6 +66,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   late final TextEditingController _bodyCtrl = TextEditingController();
 
   bool _edgeUseGateway = false;
+  bool _edgeGatewayUseSsml = false;
   String _selectedFormat = 'mp3';
   String _selectedMethod = 'POST';
   OnlineTtsProviderKind _selectedKind = OnlineTtsProviderKind.edgeTts;
@@ -108,6 +110,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     _eventSub?.cancel();
     _nameCtrl.dispose();
     _endpointCtrl.dispose();
+    _azureRegionCtrl.dispose();
     _apiKeyCtrl.dispose();
     _modelCtrl.dispose();
     _voiceCtrl.dispose();
@@ -170,10 +173,12 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     _loadedProfileId = profile.id;
     _selectedKind = profile.kind;
     _edgeUseGateway = profile.edgeUseGateway;
+    _edgeGatewayUseSsml = profile.edgeGatewayUseSsml;
     _selectedFormat = profile.format;
     _selectedMethod = profile.httpMethod;
     _nameCtrl.text = profile.name;
     _endpointCtrl.text = profile.endpointUrl;
+    _azureRegionCtrl.text = profile.azureRegion;
     _apiKeyCtrl.text = cfg.secretFor(profile.id);
     _modelCtrl.text = profile.model;
     _voiceCtrl.text = profile.voice;
@@ -182,11 +187,20 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   }
 
   OnlineTtsProfile _draftProfile(OnlineTtsProfile base) {
+    final region = _azureRegionCtrl.text.trim().isEmpty
+        ? 'eastus'
+        : _azureRegionCtrl.text.trim();
+    var endpoint = _endpointCtrl.text.trim();
+    if (_selectedKind == OnlineTtsProviderKind.azureSpeech && endpoint.isEmpty) {
+      endpoint = 'https://$region.tts.speech.microsoft.com/cognitiveservices/v1';
+    }
     return base.copyWith(
       name: _nameCtrl.text.trim().isEmpty ? base.name : _nameCtrl.text.trim(),
       kind: _selectedKind,
-      endpointUrl: _endpointCtrl.text.trim(),
+      endpointUrl: endpoint,
       edgeUseGateway: _edgeUseGateway,
+      edgeGatewayUseSsml: _edgeGatewayUseSsml,
+      azureRegion: region,
       model: _modelCtrl.text.trim().isEmpty ? 'tts-1' : _modelCtrl.text.trim(),
       voice: _voiceCtrl.text.trim().isEmpty
           ? base.voice
@@ -284,6 +298,8 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       rate: settings.ttsRate,
       pitch: settings.ttsPitch,
       apiKey: apiKey,
+      enableCache: cfg.cacheEnabled,
+      maxCacheBytes: cfg.cacheMaxMb * 1024 * 1024,
     );
     if (!mounted) return;
 
@@ -1017,6 +1033,32 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                     monospace: true,
                   ),
                   const SizedBox(height: 10),
+                  Text(
+                    l10n.ttsEdgeGatewayProtocolLabel,
+                    style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: tokens.inkMuted,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 6,
+                    children: [
+                      InkPillChip(
+                        label: l10n.ttsEdgeGatewayGet,
+                        selected: !_edgeGatewayUseSsml,
+                        onTap: () => setState(() => _edgeGatewayUseSsml = false),
+                      ),
+                      InkPillChip(
+                        label: l10n.ttsEdgeGatewayRaSsml,
+                        selected: _edgeGatewayUseSsml,
+                        onTap: () => setState(() => _edgeGatewayUseSsml = true),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
                   InkTextField(
                     controller: _apiKeyCtrl,
                     label: l10n.ttsApiKeyLabel,
@@ -1050,6 +1092,63 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                   controller: _voiceCtrl,
                   label: l10n.ttsVoiceIdLabel,
                   monospace: true,
+                ),
+              ] else if (_selectedKind ==
+                  OnlineTtsProviderKind.azureSpeech) ...[
+                InkTextField(
+                  controller: _azureRegionCtrl,
+                  label: l10n.ttsAzureRegionLabel,
+                  monospace: true,
+                ),
+                const SizedBox(height: 10),
+                InkTextField(
+                  controller: _endpointCtrl,
+                  label: l10n.ttsEndpointLabel,
+                  monospace: true,
+                ),
+                const SizedBox(height: 10),
+                InkTextField(
+                  controller: _apiKeyCtrl,
+                  label: l10n.ttsApiKeyLabel,
+                  obscureText: true,
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  l10n.ttsVoiceIdLabel,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: tokens.inkMuted,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 6,
+                  runSpacing: 6,
+                  children: kBuiltinEdgeVoices.map((v) {
+                    return InkPillChip(
+                      label: v.label,
+                      selected: _voiceCtrl.text == v.id,
+                      onTap: () => setState(() => _voiceCtrl.text = v.id),
+                    );
+                  }).toList(),
+                ),
+                const SizedBox(height: 8),
+                InkTextField(
+                  controller: _voiceCtrl,
+                  label: l10n.ttsVoiceIdLabel,
+                  monospace: true,
+                ),
+                const SizedBox(height: 10),
+                Wrap(
+                  spacing: 6,
+                  children: kOnlineAudioFormats.map((fmt) {
+                    return InkPillChip(
+                      label: fmt.toUpperCase(),
+                      selected: _selectedFormat == fmt,
+                      onTap: () => setState(() => _selectedFormat = fmt),
+                    );
+                  }).toList(),
                 ),
               ] else if (_selectedKind ==
                   OnlineTtsProviderKind.openAiCompatible) ...[
@@ -1243,7 +1342,17 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
         const SizedBox(height: 12),
         FloatingCard(
           child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
+              Text(
+                l10n.ttsCacheSettingsTitle,
+                style: TextStyle(
+                  fontSize: 13.5,
+                  fontWeight: FontWeight.w700,
+                  color: tokens.inkPrimary,
+                ),
+              ),
+              const SizedBox(height: 8),
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
@@ -1261,10 +1370,78 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
               ),
               const Divider(height: 18),
               Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   Expanded(
                     child: Text(
-                      l10n.ttsClearCacheLabel(_formatBytes(_cacheBytes)),
+                      l10n.ttsCacheEnableLabel,
+                      style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
+                    ),
+                  ),
+                  InkSwitch(
+                    value: ttsCfg.cacheEnabled,
+                    onChanged: (v) => ttsCfgCtrl.setCacheEnabled(v),
+                  ),
+                ],
+              ),
+              if (ttsCfg.cacheEnabled) ...[
+                const SizedBox(height: 10),
+                Text(
+                  l10n.ttsCacheMaxMbLabel,
+                  style: TextStyle(
+                    fontSize: 12.5,
+                    fontWeight: FontWeight.w600,
+                    color: tokens.inkMuted,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 6,
+                  children: [50, 100, 250, 500].map((mb) {
+                    return InkPillChip(
+                      label: '$mb MB',
+                      selected: ttsCfg.cacheMaxMb == mb,
+                      onTap: () async {
+                        await ttsCfgCtrl.setCacheMaxMb(mb);
+                        await _cache.enforceMaxBytes(mb * 1024 * 1024);
+                        await _refreshCacheSize();
+                      },
+                    );
+                  }).toList(),
+                ),
+              ],
+              const Divider(height: 18),
+              Text(
+                l10n.ttsPrefetchCountLabel,
+                style: TextStyle(
+                  fontSize: 12.5,
+                  fontWeight: FontWeight.w600,
+                  color: tokens.inkMuted,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Wrap(
+                spacing: 8,
+                runSpacing: 6,
+                children: [0, 1, 2, 3].map((cnt) {
+                  return InkPillChip(
+                    label: cnt == 0
+                        ? l10n.ttsPrefetchOff
+                        : l10n.ttsPrefetchUnit(cnt),
+                    selected: ttsCfg.prefetchCount == cnt,
+                    onTap: () => ttsCfgCtrl.setPrefetchCount(cnt),
+                  );
+                }).toList(),
+              ),
+              const Divider(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: Text(
+                      ttsCfg.cacheEnabled
+                          ? '${l10n.ttsClearCacheLabel(_formatBytes(_cacheBytes))} / ${ttsCfg.cacheMaxMb} MB'
+                          : l10n.ttsClearCacheLabel(_formatBytes(_cacheBytes)),
                       style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
                     ),
                   ),

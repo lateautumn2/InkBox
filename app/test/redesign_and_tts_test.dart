@@ -36,6 +36,7 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
   final List<String> playedAudioPaths = [];
   final Map<String, String> secureStore = {};
   bool speakShouldFail = false;
+  double? lastBrightness;
 
   @override
   Stream<PlatformEvent> get events => eventCtrl.stream;
@@ -57,7 +58,12 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
   @override
   Future<void> setVolumeKeyPaging(bool enabled) async {}
   @override
-  Future<void> setScreenBrightness(double? brightness) async {}
+  Future<void> setScreenBrightness(double? brightness) async {
+    lastBrightness = brightness;
+  }
+
+  @override
+  Future<double?> getScreenBrightness() async => lastBrightness ?? 0.55;
   @override
   Future<String?> speakText(
     String text, {
@@ -894,6 +900,301 @@ void main() {
       final mutated = container2.read(ttsConfigProvider);
       expect(mutated.hydrated, isTrue);
       expect(mutated.mode, TtsEngineMode.online);
+      await platform.eventCtrl.close();
+    });
+
+    testWidgets('Reader hides chapter scrubber on tab, edits 3x3 tap zones & speed, and supports edge brightness + swipe-up bookmark', (tester) async {
+      final db = AppDatabase.inMemory();
+      final tmp = Directory.systemTemp.createTempSync('inkbox_reader_gestures_');
+      final platform = _RedesignMockPlatformBridge();
+      late int bookId;
+
+      await tester.runAsync(() async {
+        final paras = List.generate(
+          28,
+          (i) => '第${i + 1}段测试阅读交互：左边缘上下滑动调节屏幕亮度，正文上滑快捷添加或取消本页书签，翻页标签支持自定义九宫格区域与滚屏速度。',
+        ).join('\n');
+        final file = File(p.join(tmp.path, 'gestures.txt'))
+          ..writeAsStringSync('第一章 初见\n$paras');
+        final now = DateTime.now().millisecondsSinceEpoch;
+        bookId = await db.upsertBook(
+          BooksCompanion.insert(
+            contentHash: 'gesture_hash_1',
+            title: '手势交互测试书',
+            format: 'TXT',
+            filePath: file.path,
+            addedAtMs: now,
+            lastReadAtMs: now,
+          ),
+        );
+      });
+
+      await tester.binding.setSurfaceSize(const Size(400, 800));
+      addTearDown(() async => tester.binding.setSurfaceSize(null));
+
+      final container = ProviderContainer(
+        overrides: [
+          appDatabaseProvider.overrideWithValue(db),
+          platformBridgeProvider.overrideWithValue(platform),
+          rustCoreProvider.overrideWithValue(null),
+        ],
+      );
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            locale: const Locale('zh'),
+            localizationsDelegates: kInkBoxLocalizationsDelegates,
+            supportedLocales: AppLocalizations.supportedLocales,
+            theme: InkBoxTheme.light(uiStyle: InkBoxUiStyle.floatingCard),
+            home: BookReaderPage(bookId: bookId),
+          ),
+        ),
+      );
+      for (var i = 0; i < 12; i++) {
+        await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 50)));
+        await tester.pump();
+        if (find.byType(ReaderHighlightCanvas).evaluate().isNotEmpty) break;
+      }
+
+      // 1. Open menu -> chapter scrubber visible; open 翻页 tab -> scrubber hidden; close tab -> scrubber back
+      await tester.tapAt(const Offset(200, 400));
+      await tester.pumpAndSettle();
+      expect(find.text('上一章'), findsOneWidget);
+      expect(find.text('下一章'), findsOneWidget);
+
+      await tester.tap(find.text('翻页').last);
+      await tester.pumpAndSettle();
+      expect(find.text('上一章'), findsNothing);
+      expect(find.text('下一章'), findsNothing);
+      expect(find.text('翻页点击区域（点击格子可自定义）'), findsOneWidget);
+      expect(find.text('滚屏速度'), findsOneWidget);
+      expect(find.byKey(const ValueKey('tap_grid_cell_0')), findsOneWidget);
+
+      // Cycle cell 0 from 上一页 -> 下一页 and verify custom tap grid updates
+      await tester.tap(find.byKey(const ValueKey('tap_grid_cell_0')));
+      await tester.pumpAndSettle();
+      final afterTapGrid = container.read(bookReaderSettingsProvider);
+      expect(afterTapGrid.tapZonePreset, TapZonePreset.custom);
+      expect(afterTapGrid.resolveTapAction(0.1, 0.1), TapZoneAction.nextPage);
+
+      // Drag Auto-Scroll speed slider -> speed changes
+      await tester.drag(find.byType(Slider).last, const Offset(80, 0));
+      await tester.pumpAndSettle();
+      expect(container.read(bookReaderSettingsProvider).autoScrollSpeed, isNot(48.0));
+
+      // Toggle 翻页 tab off -> chapter scrubber comes back
+      await tester.tap(find.text('翻页').last);
+      await tester.pumpAndSettle();
+      expect(find.text('上一章'), findsOneWidget);
+      expect(find.text('下一章'), findsOneWidget);
+
+      // Close menu
+      await tester.tapAt(const Offset(200, 400));
+      await tester.pumpAndSettle();
+
+      // 2. Left-edge vertical drag up -> updates screen brightness & shows HUD
+      await tester.timedDragFrom(
+        const Offset(22, 420),
+        const Offset(0, -140),
+        const Duration(milliseconds: 180),
+      );
+      await tester.pump();
+      expect(platform.lastBrightness, isNotNull);
+      expect(platform.lastBrightness!, greaterThan(0.55));
+      expect(find.textContaining(RegExp(r'^亮度 \d+%$')), findsOneWidget);
+      await tester.pump(const Duration(seconds: 2));
+
+      // 3. Upward swipe in body -> adds bookmark; second upward swipe -> removes bookmark
+      await tester.timedDragFrom(
+        const Offset(220, 500),
+        const Offset(0, -130),
+        const Duration(milliseconds: 180),
+      );
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+      await tester.pumpAndSettle();
+      final bms1 = (await tester.runAsync(() => db.getAnnotationsFor('gesture_hash_1')))!
+          .where((a) => !a.isDeleted && a.kind == 'bookmark')
+          .toList();
+      expect(bms1.length, 1);
+
+      await tester.timedDragFrom(
+        const Offset(220, 500),
+        const Offset(0, -130),
+        const Duration(milliseconds: 180),
+      );
+      await tester.runAsync(() => Future<void>.delayed(const Duration(milliseconds: 60)));
+      await tester.pumpAndSettle();
+      final bms2 = (await tester.runAsync(() => db.getAnnotationsFor('gesture_hash_1')))!
+          .where((a) => !a.isDeleted && a.kind == 'bookmark')
+          .toList();
+      expect(bms2, isEmpty);
+
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 1));
+      container.dispose();
+      await platform.eventCtrl.close();
+      await tester.runAsync(() async {
+        await db.close();
+        if (tmp.existsSync()) tmp.deleteSync(recursive: true);
+      });
+    });
+
+    testWidgets('PageTurnStage simulation supports top-right & bottom-right corner curl', (tester) async {
+      await tester.binding.setSurfaceSize(const Size(400, 800));
+      addTearDown(() async => tester.binding.setSurfaceSize(null));
+
+      var turns = 0;
+      await tester.pumpWidget(
+        MaterialApp(
+          home: Scaffold(
+            body: PageTurnStage(
+              mode: PageTurnMode.simulation,
+              currentPage: const ColoredBox(color: Colors.white, child: Center(child: Text('Cur'))),
+              previousPage: const ColoredBox(color: Colors.white, child: Center(child: Text('Prev'))),
+              nextPage: const ColoredBox(color: Colors.white, child: Center(child: Text('Next'))),
+              paperColor: Colors.white,
+              onTurnNext: () => turns++,
+              onTurnPrev: () {},
+              onTapNormalized: (_, __) {},
+            ),
+          ),
+        ),
+      );
+
+      // Bottom-right corner drag
+      final gBottom = await tester.startGesture(const Offset(375, 740));
+      await gBottom.moveBy(const Offset(-140, -40));
+      await tester.pump(const Duration(milliseconds: 16));
+      await gBottom.moveBy(const Offset(-120, -20));
+      await tester.pump(const Duration(milliseconds: 16));
+      await gBottom.up();
+      await tester.pumpAndSettle();
+      expect(turns, 1);
+
+      // Top-right corner drag
+      final gTop = await tester.startGesture(const Offset(375, 60));
+      await gTop.moveBy(const Offset(-140, 40));
+      await tester.pump(const Duration(milliseconds: 16));
+      await gTop.moveBy(const Offset(-120, 20));
+      await tester.pump(const Duration(milliseconds: 16));
+      await gTop.up();
+      await tester.pumpAndSettle();
+      expect(turns, 2);
+    });
+
+    test('Azure Speech, ms-ra-forwarder SSML POST, and Online TTS cache/prefetch config work cleanly', () async {
+      final prevHttpOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevHttpOverrides);
+
+      final tmpCache = Directory.systemTemp.createTempSync('inkbox_azure_ra_');
+      String? azureKeyHeader;
+      String? azureFormatHeader;
+      String? azureBody;
+      String? raMethod;
+      String? raFormatHeader;
+      String? raBody;
+
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() async {
+        await server.close(force: true);
+        if (tmpCache.existsSync()) tmpCache.deleteSync(recursive: true);
+        final live = Directory('${tmpCache.path}_live');
+        if (live.existsSync()) live.deleteSync(recursive: true);
+      });
+
+      server.listen((req) async {
+        try {
+          final body = await utf8.decodeStream(req);
+          if (req.uri.path == '/cognitiveservices/v1') {
+            azureKeyHeader = req.headers.value('ocp-apim-subscription-key');
+            azureFormatHeader = req.headers.value('x-microsoft-outputformat');
+            azureBody = body;
+            req.response.statusCode = HttpStatus.ok;
+            req.response.headers.contentType = ContentType('audio', 'mpeg');
+            req.response.add([0x49, 0x44, 0x33, 0x01, 0x02]);
+            await req.response.close();
+          } else if (req.uri.path == '/api/ra') {
+            raMethod = req.method;
+            raFormatHeader = req.headers.value('format');
+            raBody = body;
+            req.response.statusCode = HttpStatus.ok;
+            req.response.headers.contentType = ContentType('audio', 'mpeg');
+            req.response.add([0x49, 0x44, 0x33, 0x03, 0x04]);
+            await req.response.close();
+          } else {
+            req.response.statusCode = HttpStatus.notFound;
+            await req.response.close();
+          }
+        } catch (_) {}
+      });
+
+      final cache = TtsAudioCache(overrideDirPath: tmpCache.path);
+      final client = OnlineTtsClient(cache: cache);
+      final base = 'http://127.0.0.1:${server.port}';
+
+      // Azure Speech
+      final azureProfile = OnlineTtsProfile(
+        id: 'az_1',
+        name: 'Azure',
+        kind: OnlineTtsProviderKind.azureSpeech,
+        endpointUrl: '$base/cognitiveservices/v1',
+        azureRegion: 'eastus',
+        voice: 'zh-CN-XiaoxiaoNeural',
+      );
+      await client.synthesizeToFile(
+        profile: azureProfile,
+        text: '测试 Azure 官方朗读',
+        rate: 1.2,
+        pitch: 1.0,
+        apiKey: 'az-secret-key',
+      );
+      expect(azureKeyHeader, 'az-secret-key');
+      expect(azureFormatHeader, 'audio-24khz-48kbitrate-mono-mp3');
+      expect(azureBody, contains('zh-CN-XiaoxiaoNeural'));
+
+      // ms-ra-forwarder SSML POST + enableCache: false leaves persistent cache at 0 bytes
+      await cache.clear();
+      final raProfile = OnlineTtsProfile(
+        id: 'ra_1',
+        name: 'ReadAloud Gateway',
+        kind: OnlineTtsProviderKind.edgeTts,
+        edgeUseGateway: true,
+        edgeGatewayUseSsml: true,
+        endpointUrl: '$base/api/ra',
+        voice: 'zh-CN-YunxiNeural',
+      );
+      final ephemeral = await client.synthesizeToFile(
+        profile: raProfile,
+        text: '测试大声朗读转发网关',
+        rate: 1.0,
+        pitch: 1.0,
+        enableCache: false,
+      );
+      expect(raMethod, 'POST');
+      expect(raFormatHeader, 'audio-24khz-48kbitrate-mono-mp3');
+      expect(raBody, contains('zh-CN-YunxiNeural'));
+      expect(ephemeral.existsSync(), isTrue);
+      expect(await cache.totalSizeBytes(), 0);
+
+      // Config persistence for cacheEnabled / cacheMaxMb / prefetchCount
+      SharedPreferences.setMockInitialValues({});
+      final platform = _RedesignMockPlatformBridge();
+      final container = ProviderContainer(
+        overrides: [platformBridgeProvider.overrideWithValue(platform)],
+      );
+      addTearDown(container.dispose);
+
+      final notifier = container.read(ttsConfigProvider.notifier);
+      await notifier.setCacheEnabled(false);
+      await notifier.setCacheMaxMb(250);
+      await notifier.setPrefetchCount(3);
+      final cfg = container.read(ttsConfigProvider);
+      expect(cfg.cacheEnabled, isFalse);
+      expect(cfg.cacheMaxMb, 250);
+      expect(cfg.prefetchCount, 3);
       await platform.eventCtrl.close();
     });
   });

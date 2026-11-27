@@ -1337,13 +1337,69 @@ class AppLocalizationsZh extends AppLocalizations {
   String get ttsImportLegado => '导入 Legado JSON';
 
   @override
-  String get ttsProviderEdge => 'Edge TTS';
+  String get ttsProviderEdge => '微软大声朗读 (Edge)';
+
+  @override
+  String get ttsProviderAzure => '微软 Azure 官方语音';
 
   @override
   String get ttsProviderOpenAi => 'OpenAI 兼容';
 
   @override
   String get ttsProviderCustomHttp => '自定义 HTTP';
+
+  @override
+  String get ttsEdgeGatewayProtocolLabel => '网关协议';
+
+  @override
+  String get ttsEdgeGatewayGet => 'GET 参数 (tts-server)';
+
+  @override
+  String get ttsEdgeGatewayRaSsml => 'SSML POST (ms-ra-forwarder)';
+
+  @override
+  String get ttsAzureRegionLabel => '服务区域 (如 eastus / eastasia)';
+
+  @override
+  String get ttsCacheSettingsTitle => '缓存与预加载';
+
+  @override
+  String get ttsCacheEnableLabel => '开启在线音频缓存';
+
+  @override
+  String get ttsCacheMaxMbLabel => '缓存空间上限';
+
+  @override
+  String get ttsPrefetchCountLabel => '预加载句数';
+
+  @override
+  String get ttsPrefetchOff => '关闭';
+
+  @override
+  String ttsPrefetchUnit(int count) {
+    return '$count 句';
+  }
+
+  @override
+  String get tapZoneSectionLabel => '翻页点击区域（点击格子可自定义）';
+
+  @override
+  String get tapActionPrev => '上一页';
+
+  @override
+  String get tapActionNext => '下一页';
+
+  @override
+  String get tapActionMenu => '菜单';
+
+  @override
+  String get tapActionBookmark => '书签';
+
+  @override
+  String get tapActionTts => '听书';
+
+  @override
+  String get autoScrollSpeedLabel => '滚屏速度';
 
   @override
   String get ttsProfileNameLabel => '方案名称';

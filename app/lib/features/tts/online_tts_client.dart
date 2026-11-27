@@ -63,6 +63,8 @@ class OnlineTtsClient {
     required double pitch,
     String apiKey = '',
     bool bypassCache = false,
+    bool enableCache = true,
+    int? maxCacheBytes,
   }) async {
     final trimmed = text.trim();
     if (trimmed.isEmpty) {
@@ -71,7 +73,7 @@ class OnlineTtsClient {
 
     final ext = _resolveFileExt(profile.format);
     final configFingerprint =
-        '${profile.kind.name}|${profile.edgeUseGateway}|${profile.endpointUrl}|${profile.model}|${profile.httpMethod}|${profile.headersJson}|${profile.bodyTemplate}';
+        '${profile.kind.name}|${profile.edgeUseGateway}|${profile.edgeGatewayUseSsml}|${profile.azureRegion}|${profile.endpointUrl}|${profile.model}|${profile.httpMethod}|${profile.headersJson}|${profile.bodyTemplate}';
     final key = _cache.keyFor(
       profileId: profile.id,
       configFingerprint: configFingerprint,
@@ -81,7 +83,7 @@ class OnlineTtsClient {
       format: ext,
       text: trimmed,
     );
-    if (!bypassCache) {
+    if (enableCache && !bypassCache) {
       final cached = await _cache.getCachedFile(key, ext);
       if (cached != null) return cached;
     }
@@ -101,6 +103,13 @@ class OnlineTtsClient {
               rate: rate,
               pitch: pitch,
             ),
+      OnlineTtsProviderKind.azureSpeech => await _synthesizeAzureSpeech(
+          profile: profile,
+          text: trimmed,
+          rate: rate,
+          pitch: pitch,
+          apiKey: apiKey,
+        ),
       OnlineTtsProviderKind.openAiCompatible => await _synthesizeOpenAi(
           profile: profile,
           text: trimmed,
@@ -119,7 +128,10 @@ class OnlineTtsClient {
     if (bytes.isEmpty) {
       throw const OnlineTtsException('ERR_INVALID_AUDIO', 'Empty response');
     }
-    return _cache.putBytes(key, ext, bytes);
+    if (!enableCache) {
+      return _cache.writeEphemeralFile(ext, bytes);
+    }
+    return _cache.putBytes(key, ext, bytes, maxBytesOverride: maxCacheBytes);
   }
 
   Future<OnlineTtsTestResult> testConnection({
@@ -128,6 +140,8 @@ class OnlineTtsClient {
     required double rate,
     required double pitch,
     String apiKey = '',
+    bool enableCache = true,
+    int? maxCacheBytes,
   }) async {
     final sw = Stopwatch()..start();
     try {
@@ -138,6 +152,8 @@ class OnlineTtsClient {
         pitch: pitch,
         apiKey: apiKey,
         bypassCache: true,
+        enableCache: enableCache,
+        maxCacheBytes: maxCacheBytes,
       );
       sw.stop();
       return OnlineTtsTestResult(
@@ -224,6 +240,26 @@ class OnlineTtsClient {
       );
     }
     final parsed = Uri.parse(endpoint);
+    if (profile.edgeGatewayUseSsml ||
+        parsed.path.toLowerCase().endsWith('/api/ra')) {
+      final ssml = _buildSsml(
+        voice: profile.voice,
+        text: text,
+        rate: rate,
+        pitch: pitch,
+      );
+      final headers = <String, String>{
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Format': _azureOutputFormat(profile.format),
+        if (apiKey.trim().isNotEmpty) 'Authorization': 'Bearer ${apiKey.trim()}',
+      };
+      return _sendHttpRequest(
+        method: 'POST',
+        uri: parsed,
+        headers: headers,
+        body: ssml,
+      );
+    }
     final qp = Map<String, String>.from(parsed.queryParameters)
       ..putIfAbsent('text', () => text)
       ..putIfAbsent(
@@ -237,6 +273,65 @@ class OnlineTtsClient {
       if (apiKey.trim().isNotEmpty) 'Authorization': 'Bearer ${apiKey.trim()}',
     };
     return _sendHttpRequest(method: 'GET', uri: uri, headers: headers);
+  }
+
+  Future<Uint8List> _synthesizeAzureSpeech({
+    required OnlineTtsProfile profile,
+    required String text,
+    required double rate,
+    required double pitch,
+    required String apiKey,
+  }) async {
+    var endpoint = profile.endpointUrl.trim();
+    if (endpoint.isEmpty) {
+      final region =
+          profile.azureRegion.trim().isEmpty ? 'eastus' : profile.azureRegion.trim();
+      endpoint = 'https://$region.tts.speech.microsoft.com/cognitiveservices/v1';
+    }
+    final uri = Uri.parse(endpoint);
+    final headers = <String, String>{
+      'Content-Type': 'application/ssml+xml',
+      'X-Microsoft-OutputFormat': _azureOutputFormat(profile.format),
+      'User-Agent': 'InkBox',
+      if (apiKey.trim().isNotEmpty) 'Ocp-Apim-Subscription-Key': apiKey.trim(),
+    };
+    final ssml = _buildSsml(
+      voice: profile.voice,
+      text: text,
+      rate: rate,
+      pitch: pitch,
+    );
+    return _sendHttpRequest(
+      method: 'POST',
+      uri: uri,
+      headers: headers,
+      body: ssml,
+    );
+  }
+
+  String _buildSsml({
+    required String voice,
+    required String text,
+    required double rate,
+    required double pitch,
+  }) {
+    final safeVoice = voice.trim().isEmpty ? 'zh-CN-XiaoxiaoNeural' : voice.trim();
+    final locale = _localeFromVoice(safeVoice);
+    final ratePct = _formatSignedPct((rate - 1.0) * 100);
+    final pitchHz = _formatSignedHz((pitch - 1.0) * 20);
+    final escapedText = _xmlEscape(text);
+    return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='$locale'>"
+        "<voice name='$safeVoice'>"
+        "<prosody pitch='$pitchHz' rate='$ratePct' volume='+0%'>$escapedText</prosody>"
+        '</voice></speak>';
+  }
+
+  static String _azureOutputFormat(String format) {
+    return switch (_resolveFileExt(format)) {
+      'opus' => 'audio-24khz-48kbitrate-mono-opus',
+      'wav' => 'riff-24khz-16bit-mono-pcm',
+      _ => 'audio-24khz-48kbitrate-mono-mp3',
+    };
   }
 
   Future<Uint8List> _synthesizeCustomHttp({
@@ -440,11 +535,6 @@ class OnlineTtsClient {
     final audioBytes = BytesBuilder(copy: false);
     final completer = Completer<Uint8List>();
     final reqId = _randomHex32();
-    final voice =
-        profile.voice.trim().isEmpty ? 'zh-CN-XiaoxiaoNeural' : profile.voice.trim();
-    final locale = _localeFromVoice(voice);
-    final ratePct = _formatSignedPct((rate - 1.0) * 100);
-    final pitchHz = _formatSignedHz((pitch - 1.0) * 20);
     final timestamp = DateTime.now().toUtc().toIso8601String();
 
     final sub = ws.listen(
@@ -499,12 +589,12 @@ class OnlineTtsClient {
         '"outputFormat":"audio-24khz-48kbitrate-mono-mp3"}}}}';
     ws.add(configMsg);
 
-    final escapedText = _xmlEscape(text);
-    final ssml =
-        "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='$locale'>"
-        "<voice name='$voice'>"
-        "<prosody pitch='$pitchHz' rate='$ratePct' volume='+0%'>$escapedText</prosody>"
-        '</voice></speak>';
+    final ssml = _buildSsml(
+      voice: profile.voice,
+      text: text,
+      rate: rate,
+      pitch: pitch,
+    );
     final ssmlMsg =
         'X-RequestId:$reqId\r\nContent-Type:application/ssml+xml\r\n'
         'X-Timestamp:$timestamp\r\nPath:ssml\r\n\r\n$ssml';

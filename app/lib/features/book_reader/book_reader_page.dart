@@ -81,7 +81,8 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   int _ttsScrollOffset = 0;
   late final TtsPlaybackController _ttsCtrl;
   BookPaperTheme _lastLightPaper = BookPaperTheme.white;
-  double _readerBrightness = 1.0;
+  double _readerBrightness = 0.55;
+  bool _brightnessOverridden = false;
   bool _showBrightnessIndicator = false;
   Timer? _brightnessHideTimer;
 
@@ -159,6 +160,9 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     _persistProgress(flushTime: true);
     _platform.setVolumeKeyPaging(false);
     _platform.setKeepScreenOn(false);
+    if (_brightnessOverridden) {
+      _platform.setScreenBrightness(null);
+    }
     _ttsCtrl.removeListener(_onTtsControllerChanged);
     _ttsCtrl.dispose();
     for (final media in _bookFiles.values) {
@@ -199,6 +203,11 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     final settings = ref.read(bookReaderSettingsProvider);
     await _platform.setKeepScreenOn(settings.keepScreenOn);
     await _platform.setVolumeKeyPaging(settings.volumeKeyPaging);
+    final initB = await _platform.getScreenBrightness();
+    if (!mounted) return;
+    if (initB != null && !_brightnessOverridden) {
+      setState(() => _readerBrightness = initB.clamp(0.05, 1.0));
+    }
 
     _eventSub = _platform.events.listen((ev) {
       if (!mounted) return;
@@ -1570,6 +1579,30 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     _toast(l10n.exportNotesSuccess(notes.length));
   }
 
+  void _handleBrightnessDelta(double deltaY, double viewportHeight) {
+    _brightnessHideTimer?.cancel();
+    final span = (viewportHeight * 0.65).clamp(240.0, 520.0);
+    final next = (_readerBrightness - deltaY / span).clamp(0.02, 1.0);
+    setState(() {
+      _readerBrightness = next;
+      _brightnessOverridden = true;
+      _showBrightnessIndicator = true;
+    });
+    unawaited(_platform.setScreenBrightness(next));
+  }
+
+  void _scheduleHideBrightnessHud() {
+    _brightnessHideTimer?.cancel();
+    _brightnessHideTimer = Timer(
+      const Duration(milliseconds: 1400),
+      () {
+        if (mounted) {
+          setState(() => _showBrightnessIndicator = false);
+        }
+      },
+    );
+  }
+
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -2241,6 +2274,18 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                       canTurnNext: _canTurnNext,
                       paperColor: paper.background,
                       selectionActive: _activeSelection != null,
+                      enableEdgeVerticalDrag: settings.edgeBrightnessGesture &&
+                          !_menuVisible &&
+                          _activeSelection == null &&
+                          _inspectedAnnotation == null,
+                      edgeZoneWidth: 56.0,
+                      onEdgeVerticalDragUpdate: _handleBrightnessDelta,
+                      onEdgeVerticalDragEnd: _scheduleHideBrightnessHud,
+                      onSwipeUpAction: (!_menuVisible &&
+                              _activeSelection == null &&
+                              _inspectedAnnotation == null)
+                          ? _togglePageBookmark
+                          : null,
                       onInterceptTap: _tryInterceptCanvasTap,
                       onTurnNext: _commitTurnNext,
                       onTurnPrev: _commitTurnPrev,
@@ -2253,50 +2298,37 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                 ),
 
               // Reader brightness dimming veil (edge-swipe adjustable)
-              if (_readerBrightness < 0.995)
+              if (_brightnessOverridden && _readerBrightness < 0.99)
                 Positioned.fill(
                   child: IgnorePointer(
                     child: ColoredBox(
                       color: Colors.black.withValues(
-                        alpha: (1.0 - _readerBrightness).clamp(0.0, 0.75),
+                        alpha: ((1.0 - _readerBrightness) * 0.42).clamp(0.0, 0.55),
                       ),
                     ),
                   ),
                 ),
 
-              // Left-edge vertical brightness gesture strip
+              // Left-edge vertical brightness gesture strip (Scroll & PDF bitmap modes)
               if (settings.edgeBrightnessGesture &&
+                  (isScrollMode || (isRealPdf && !settings.pdfReflowMode)) &&
                   !_loading &&
                   !_menuVisible &&
                   _activeSelection == null &&
                   _inspectedAnnotation == null)
                 Positioned(
                   left: 0,
-                  top: safePadding.top + 40,
-                  bottom: safePadding.bottom + 40,
-                  width: 36,
+                  top: safePadding.top + 36,
+                  bottom: safePadding.bottom + 36,
+                  width: 56,
                   child: GestureDetector(
                     behavior: HitTestBehavior.translucent,
-                    onVerticalDragUpdate: (d) {
-                      _brightnessHideTimer?.cancel();
-                      setState(() {
-                        _readerBrightness =
-                            (_readerBrightness - d.delta.dy / 300.0)
-                                .clamp(0.25, 1.0);
-                        _showBrightnessIndicator = true;
-                      });
-                    },
-                    onVerticalDragEnd: (_) {
-                      _brightnessHideTimer?.cancel();
-                      _brightnessHideTimer = Timer(
-                        const Duration(milliseconds: 1400),
-                        () {
-                          if (mounted) {
-                            setState(() => _showBrightnessIndicator = false);
-                          }
-                        },
-                      );
-                    },
+                    onVerticalDragUpdate: (d) => _handleBrightnessDelta(
+                      d.delta.dy,
+                      outerConstraints.maxHeight,
+                    ),
+                    onVerticalDragEnd: (_) => _scheduleHideBrightnessHud(),
+                    onVerticalDragCancel: _scheduleHideBrightnessHud,
                   ),
                 ),
 
@@ -2306,28 +2338,48 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     child: Center(
                       child: FloatingCard(
                         frosted: true,
-                        radius: 999,
+                        radius: 20,
                         padding: const EdgeInsets.symmetric(
                           horizontal: 16,
-                          vertical: 9,
+                          vertical: 11,
                         ),
-                        child: Row(
+                        child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            InkIconWidget(
-                              InkIcon.brightness,
-                              size: 16,
-                              color: tokens.accentPrimary,
+                            Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                InkIconWidget(
+                                  InkIcon.brightness,
+                                  size: 16,
+                                  color: tokens.accentPrimary,
+                                ),
+                                const SizedBox(width: 8),
+                                Text(
+                                  l10n.brightnessIndicator(
+                                    (_readerBrightness * 100).round(),
+                                  ),
+                                  style: TextStyle(
+                                    fontSize: 12.5,
+                                    fontWeight: FontWeight.w600,
+                                    color: tokens.inkPrimary,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 8),
-                            Text(
-                              l10n.brightnessIndicator(
-                                (_readerBrightness * 100).round(),
-                              ),
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                color: tokens.inkPrimary,
+                            const SizedBox(height: 8),
+                            SizedBox(
+                              width: 120,
+                              child: ClipRRect(
+                                borderRadius: BorderRadius.circular(999),
+                                child: LinearProgressIndicator(
+                                  value: _readerBrightness,
+                                  minHeight: 4,
+                                  backgroundColor: tokens.subtleBorder,
+                                  valueColor: AlwaysStoppedAnimation<Color>(
+                                    tokens.accentPrimary,
+                                  ),
+                                ),
                               ),
                             ),
                           ],
@@ -2635,81 +2687,106 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                         child: Column(
                           mainAxisSize: MainAxisSize.min,
                           children: [
-                            if (_scrubChapterIdx != null && _chapters.isNotEmpty)
-                              Padding(
-                                padding: const EdgeInsets.only(bottom: 4),
-                                child: Text(
-                                  '${_chapters[_scrubChapterIdx!.clamp(0, _chapters.length - 1)].title} (${_scrubChapterIdx! + 1}/${_chapters.length})',
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: TextStyle(
-                                    fontSize: 11.5,
-                                    fontWeight: FontWeight.w600,
-                                    color: tokens.accentPrimary,
-                                  ),
-                                ),
-                              ),
-                            Row(
-                              children: [
-                                TextButton(
-                                  onPressed: _chapterIdx > 0
-                                      ? () => _loadChapter(_chapterIdx - 1)
-                                      : null,
+                            if (_sheetTab == null) ...[
+                              if (_scrubChapterIdx != null && _chapters.isNotEmpty)
+                                Padding(
+                                  padding: const EdgeInsets.only(bottom: 4),
                                   child: Text(
-                                    l10n.prevChapter,
-                                    style: const TextStyle(fontSize: 12),
+                                    '${_chapters[_scrubChapterIdx!.clamp(0, _chapters.length - 1)].title} (${_scrubChapterIdx! + 1}/${_chapters.length})',
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      fontWeight: FontWeight.w600,
+                                      color: tokens.accentPrimary,
+                                    ),
                                   ),
                                 ),
-                                Expanded(
-                                  child: Slider(
-                                    min: 0,
-                                    max: (_chapters.length - 1)
-                                        .clamp(1, 1000000)
-                                        .toDouble(),
-                                    value: (_scrubChapterIdx ?? _chapterIdx)
-                                        .clamp(
-                                            0,
-                                            (_chapters.length - 1)
-                                                .clamp(1, 1000000))
-                                        .toDouble(),
-                                    onChanged: _chapters.length > 1
-                                        ? (v) => setState(
-                                            () => _scrubChapterIdx = v.round())
+                              Row(
+                                children: [
+                                  TextButton(
+                                    onPressed: _chapterIdx > 0
+                                        ? () => _loadChapter(_chapterIdx - 1)
                                         : null,
-                                    onChangeEnd: _chapters.length > 1
-                                        ? (v) {
-                                            final target = v.round();
-                                            setState(
-                                                () => _scrubChapterIdx = null);
-                                            if (target != _chapterIdx) {
-                                              _loadChapter(target);
+                                    child: Text(
+                                      l10n.prevChapter,
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
+                                  ),
+                                  Expanded(
+                                    child: Slider(
+                                      min: 0,
+                                      max: (_chapters.length - 1)
+                                          .clamp(1, 1000000)
+                                          .toDouble(),
+                                      value: (_scrubChapterIdx ?? _chapterIdx)
+                                          .clamp(
+                                              0,
+                                              (_chapters.length - 1)
+                                                  .clamp(1, 1000000))
+                                          .toDouble(),
+                                      onChanged: _chapters.length > 1
+                                          ? (v) => setState(
+                                              () => _scrubChapterIdx = v.round())
+                                          : null,
+                                      onChangeEnd: _chapters.length > 1
+                                          ? (v) {
+                                              final target = v.round();
+                                              setState(
+                                                  () => _scrubChapterIdx = null);
+                                              if (target != _chapterIdx) {
+                                                _loadChapter(target);
+                                              }
                                             }
-                                          }
+                                          : null,
+                                    ),
+                                  ),
+                                  TextButton(
+                                    onPressed: _chapterIdx + 1 < _chapters.length
+                                        ? () => _loadChapter(_chapterIdx + 1)
                                         : null,
+                                    child: Text(
+                                      l10n.nextChapter,
+                                      style: const TextStyle(fontSize: 12),
+                                    ),
                                   ),
-                                ),
-                                TextButton(
-                                  onPressed: _chapterIdx + 1 < _chapters.length
-                                      ? () => _loadChapter(_chapterIdx + 1)
-                                      : null,
-                                  child: Text(
-                                    l10n.nextChapter,
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                ),
-                              ],
-                            ),
+                                ],
+                              ),
+                            ],
 
                             if (_sheetTab == 'toc')
-                              _buildTocPanel(tokens, annotations),
-                            if (_sheetTab == 'style')
-                              _buildStylePanel(tokens, settings, settingsCtrl),
-                            if (_sheetTab == 'anim')
-                              _buildAnimPanel(tokens, settings, settingsCtrl),
-                            if (_sheetTab == 'more')
-                              _buildMorePanel(tokens, settings, settingsCtrl),
+                              _buildTocPanel(tokens, annotations)
+                            else if (_sheetTab == 'style' ||
+                                _sheetTab == 'anim' ||
+                                _sheetTab == 'more')
+                              ConstrainedBox(
+                                constraints: BoxConstraints(
+                                  maxHeight:
+                                      (MediaQuery.sizeOf(context).height * 0.56)
+                                          .clamp(220.0, 460.0),
+                                ),
+                                child: SingleChildScrollView(
+                                  child: _sheetTab == 'style'
+                                      ? _buildStylePanel(
+                                          tokens,
+                                          settings,
+                                          settingsCtrl,
+                                        )
+                                      : _sheetTab == 'anim'
+                                          ? _buildAnimPanel(
+                                              tokens,
+                                              settings,
+                                              settingsCtrl,
+                                            )
+                                          : _buildMorePanel(
+                                              tokens,
+                                              settings,
+                                              settingsCtrl,
+                                            ),
+                                ),
+                              ),
 
-                            const Divider(height: 14),
+                            if (_sheetTab == null) const Divider(height: 14),
                             Row(
                               mainAxisAlignment: MainAxisAlignment.spaceAround,
                               children: [
@@ -3367,6 +3444,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     BookReaderSettingsController ctrl,
   ) {
     final l10n = context.l10n;
+    final grid = settings.effectiveTapGrid;
     return Column(
       mainAxisSize: MainAxisSize.min,
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -3389,7 +3467,12 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             );
           }).toList(),
         ),
-        const SizedBox(height: 8),
+        const SizedBox(height: 10),
+        Text(
+          l10n.tapZoneSectionLabel,
+          style: TextStyle(fontSize: 11.5, color: tokens.inkMuted),
+        ),
+        const SizedBox(height: 6),
         Wrap(
           spacing: 8,
           runSpacing: 6,
@@ -3402,6 +3485,86 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             );
           }).toList(),
         ),
+        const SizedBox(height: 8),
+        Container(
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(color: tokens.subtleBorder),
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: List.generate(3, (r) {
+              return Row(
+                children: List.generate(3, (c) {
+                  final cellIdx = r * 3 + c;
+                  final action = grid[cellIdx];
+                  final tint = switch (action) {
+                    TapZoneAction.prevPage =>
+                      tokens.accentPrimary.withValues(alpha: 0.08),
+                    TapZoneAction.nextPage =>
+                      tokens.accentPrimary.withValues(alpha: 0.16),
+                    TapZoneAction.toggleMenu =>
+                      tokens.accentWarm.withValues(alpha: 0.14),
+                    TapZoneAction.bookmark =>
+                      const Color(0xFF4A8B6F).withValues(alpha: 0.16),
+                    TapZoneAction.tts =>
+                      const Color(0xFF7B61AA).withValues(alpha: 0.16),
+                  };
+                  return Expanded(
+                    child: InkWell(
+                      key: ValueKey('tap_grid_cell_$cellIdx'),
+                      onTap: () {
+                        final nextAction = TapZoneAction.values[
+                            (action.index + 1) % TapZoneAction.values.length];
+                        final updated = List<TapZoneAction>.of(grid);
+                        updated[cellIdx] = nextAction;
+                        ctrl.update(
+                          (s) => s.copyWith(
+                            tapZonePreset: TapZonePreset.custom,
+                            customTapGrid: updated,
+                          ),
+                        );
+                      },
+                      child: Container(
+                        height: 36,
+                        alignment: Alignment.center,
+                        decoration: BoxDecoration(
+                          color: tint,
+                          border: Border(
+                            right: c < 2
+                                ? BorderSide(
+                                    color: tokens.subtleBorder,
+                                    width: 0.5,
+                                  )
+                                : BorderSide.none,
+                            bottom: r < 2
+                                ? BorderSide(
+                                    color: tokens.subtleBorder,
+                                    width: 0.5,
+                                  )
+                                : BorderSide.none,
+                          ),
+                        ),
+                        child: Text(
+                          action.labelOf(l10n),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
+                            color: tokens.inkPrimary,
+                          ),
+                        ),
+                      ),
+                    ),
+                  );
+                }),
+              );
+            }),
+          ),
+        ),
+        const SizedBox(height: 8),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -3413,6 +3576,31 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
               onPressed: _toggleAutoScroll,
               child: Text(
                 _autoScrolling ? l10n.stopAutoScroll : l10n.startAutoScroll,
+              ),
+            ),
+          ],
+        ),
+        Row(
+          children: [
+            Text(
+              l10n.autoScrollSpeedLabel,
+              style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+            ),
+            Expanded(
+              child: Slider(
+                min: 16.0,
+                max: 140.0,
+                value: settings.autoScrollSpeed.clamp(16.0, 140.0),
+                onChanged: (v) =>
+                    ctrl.update((s) => s.copyWith(autoScrollSpeed: v)),
+              ),
+            ),
+            Text(
+              '${settings.autoScrollSpeed.round()}',
+              style: TextStyle(
+                fontSize: 11.5,
+                color: tokens.inkMuted,
+                fontFeatures: const [FontFeature.tabularFigures()],
               ),
             ),
           ],

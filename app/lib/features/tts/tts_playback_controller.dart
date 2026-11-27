@@ -242,8 +242,9 @@ class TtsPlaybackController extends ChangeNotifier {
     if (_useOnline) {
       _status = TtsPlaybackStatus.loading;
       _safeNotify();
-      _schedulePrefetch(idx + 1, token);
-      _schedulePrefetch(idx + 2, token);
+      for (var offset = 1; offset <= _ttsConfig.prefetchCount; offset++) {
+        _schedulePrefetch(idx + offset, token);
+      }
 
       File? audioFile;
       OnlineTtsException? failure;
@@ -356,6 +357,8 @@ class TtsPlaybackController extends ChangeNotifier {
       rate: _readerSettings.ttsRate,
       pitch: _readerSettings.ttsPitch,
       apiKey: secret,
+      enableCache: _ttsConfig.cacheEnabled,
+      maxCacheBytes: _ttsConfig.cacheMaxMb * 1024 * 1024,
     );
   }
 

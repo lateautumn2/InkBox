@@ -2497,8 +2497,14 @@ abstract class AppLocalizations {
   /// No description provided for @ttsProviderEdge.
   ///
   /// In zh, this message translates to:
-  /// **'Edge TTS'**
+  /// **'微软大声朗读 (Edge)'**
   String get ttsProviderEdge;
+
+  /// No description provided for @ttsProviderAzure.
+  ///
+  /// In zh, this message translates to:
+  /// **'微软 Azure 官方语音'**
+  String get ttsProviderAzure;
 
   /// No description provided for @ttsProviderOpenAi.
   ///
@@ -2511,6 +2517,108 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'自定义 HTTP'**
   String get ttsProviderCustomHttp;
+
+  /// No description provided for @ttsEdgeGatewayProtocolLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'网关协议'**
+  String get ttsEdgeGatewayProtocolLabel;
+
+  /// No description provided for @ttsEdgeGatewayGet.
+  ///
+  /// In zh, this message translates to:
+  /// **'GET 参数 (tts-server)'**
+  String get ttsEdgeGatewayGet;
+
+  /// No description provided for @ttsEdgeGatewayRaSsml.
+  ///
+  /// In zh, this message translates to:
+  /// **'SSML POST (ms-ra-forwarder)'**
+  String get ttsEdgeGatewayRaSsml;
+
+  /// No description provided for @ttsAzureRegionLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'服务区域 (如 eastus / eastasia)'**
+  String get ttsAzureRegionLabel;
+
+  /// No description provided for @ttsCacheSettingsTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓存与预加载'**
+  String get ttsCacheSettingsTitle;
+
+  /// No description provided for @ttsCacheEnableLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'开启在线音频缓存'**
+  String get ttsCacheEnableLabel;
+
+  /// No description provided for @ttsCacheMaxMbLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'缓存空间上限'**
+  String get ttsCacheMaxMbLabel;
+
+  /// No description provided for @ttsPrefetchCountLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'预加载句数'**
+  String get ttsPrefetchCountLabel;
+
+  /// No description provided for @ttsPrefetchOff.
+  ///
+  /// In zh, this message translates to:
+  /// **'关闭'**
+  String get ttsPrefetchOff;
+
+  /// No description provided for @ttsPrefetchUnit.
+  ///
+  /// In zh, this message translates to:
+  /// **'{count} 句'**
+  String ttsPrefetchUnit(int count);
+
+  /// No description provided for @tapZoneSectionLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'翻页点击区域（点击格子可自定义）'**
+  String get tapZoneSectionLabel;
+
+  /// No description provided for @tapActionPrev.
+  ///
+  /// In zh, this message translates to:
+  /// **'上一页'**
+  String get tapActionPrev;
+
+  /// No description provided for @tapActionNext.
+  ///
+  /// In zh, this message translates to:
+  /// **'下一页'**
+  String get tapActionNext;
+
+  /// No description provided for @tapActionMenu.
+  ///
+  /// In zh, this message translates to:
+  /// **'菜单'**
+  String get tapActionMenu;
+
+  /// No description provided for @tapActionBookmark.
+  ///
+  /// In zh, this message translates to:
+  /// **'书签'**
+  String get tapActionBookmark;
+
+  /// No description provided for @tapActionTts.
+  ///
+  /// In zh, this message translates to:
+  /// **'听书'**
+  String get tapActionTts;
+
+  /// No description provided for @autoScrollSpeedLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'滚屏速度'**
+  String get autoScrollSpeedLabel;
 
   /// No description provided for @ttsProfileNameLabel.
   ///

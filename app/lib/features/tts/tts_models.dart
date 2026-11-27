@@ -13,6 +13,7 @@ enum TtsEngineMode {
 
 enum OnlineTtsProviderKind {
   edgeTts,
+  azureSpeech,
   openAiCompatible,
   customHttp,
 }
@@ -104,6 +105,8 @@ class OnlineTtsProfile {
     required this.kind,
     this.endpointUrl = '',
     this.edgeUseGateway = false,
+    this.edgeGatewayUseSsml = false,
+    this.azureRegion = 'eastus',
     this.model = 'tts-1',
     this.voice = 'zh-CN-XiaoxiaoNeural',
     this.format = 'mp3',
@@ -117,6 +120,8 @@ class OnlineTtsProfile {
   final OnlineTtsProviderKind kind;
   final String endpointUrl;
   final bool edgeUseGateway;
+  final bool edgeGatewayUseSsml;
+  final String azureRegion;
   final String model;
   final String voice;
   final String format;
@@ -130,6 +135,8 @@ class OnlineTtsProfile {
     OnlineTtsProviderKind? kind,
     String? endpointUrl,
     bool? edgeUseGateway,
+    bool? edgeGatewayUseSsml,
+    String? azureRegion,
     String? model,
     String? voice,
     String? format,
@@ -143,6 +150,8 @@ class OnlineTtsProfile {
       kind: kind ?? this.kind,
       endpointUrl: endpointUrl ?? this.endpointUrl,
       edgeUseGateway: edgeUseGateway ?? this.edgeUseGateway,
+      edgeGatewayUseSsml: edgeGatewayUseSsml ?? this.edgeGatewayUseSsml,
+      azureRegion: azureRegion ?? this.azureRegion,
       model: model ?? this.model,
       voice: voice ?? this.voice,
       format: format ?? this.format,
@@ -159,6 +168,8 @@ class OnlineTtsProfile {
         'kind': kind.name,
         'endpointUrl': endpointUrl,
         'edgeUseGateway': edgeUseGateway,
+        'edgeGatewayUseSsml': edgeGatewayUseSsml,
+        'azureRegion': azureRegion,
         'model': model,
         'voice': voice,
         'format': format,
@@ -175,10 +186,12 @@ class OnlineTtsProfile {
     );
     return OnlineTtsProfile(
       id: json['id'] as String? ?? 'edge_default',
-      name: json['name'] as String? ?? 'Edge TTS',
+      name: json['name'] as String? ?? '微软大声朗读 (Edge)',
       kind: kind,
       endpointUrl: json['endpointUrl'] as String? ?? '',
       edgeUseGateway: json['edgeUseGateway'] as bool? ?? false,
+      edgeGatewayUseSsml: json['edgeGatewayUseSsml'] as bool? ?? false,
+      azureRegion: json['azureRegion'] as String? ?? 'eastus',
       model: json['model'] as String? ?? 'tts-1',
       voice: json['voice'] as String? ?? 'zh-CN-XiaoxiaoNeural',
       format: json['format'] as String? ?? 'mp3',
@@ -191,10 +204,11 @@ class OnlineTtsProfile {
   static List<OnlineTtsProfile> defaultPresets() => const [
         OnlineTtsProfile(
           id: 'edge_default',
-          name: 'Edge TTS',
+          name: '微软大声朗读 (Edge)',
           kind: OnlineTtsProviderKind.edgeTts,
-          endpointUrl: 'http://127.0.0.1:3000/api/tts',
+          endpointUrl: 'http://127.0.0.1:3000/api/ra',
           edgeUseGateway: false,
+          edgeGatewayUseSsml: true,
           voice: 'zh-CN-XiaoxiaoNeural',
           format: 'mp3',
         ),
@@ -218,10 +232,22 @@ class OnlineTtsProfile {
       case OnlineTtsProviderKind.edgeTts:
         return OnlineTtsProfile(
           id: id,
-          name: name ?? 'Edge TTS',
+          name: name ?? '微软大声朗读 (Edge)',
           kind: kind,
-          endpointUrl: 'http://127.0.0.1:3000/api/tts',
+          endpointUrl: 'http://127.0.0.1:3000/api/ra',
           edgeUseGateway: false,
+          edgeGatewayUseSsml: true,
+          voice: 'zh-CN-XiaoxiaoNeural',
+          format: 'mp3',
+        );
+      case OnlineTtsProviderKind.azureSpeech:
+        return OnlineTtsProfile(
+          id: id,
+          name: name ?? 'Azure Speech',
+          kind: kind,
+          endpointUrl:
+              'https://eastus.tts.speech.microsoft.com/cognitiveservices/v1',
+          azureRegion: 'eastus',
           voice: 'zh-CN-XiaoxiaoNeural',
           format: 'mp3',
         );
@@ -333,6 +359,9 @@ class TtsConfigState {
     this.secrets = const {},
     this.fallbackToLocalTts = true,
     this.sleepAtChapterEnd = false,
+    this.cacheEnabled = true,
+    this.cacheMaxMb = 100,
+    this.prefetchCount = 2,
     this.hydrated = false,
   });
 
@@ -342,6 +371,9 @@ class TtsConfigState {
   final Map<String, String> secrets; // Kept in memory + Keystore, never serialized
   final bool fallbackToLocalTts;
   final bool sleepAtChapterEnd;
+  final bool cacheEnabled;
+  final int cacheMaxMb;
+  final int prefetchCount;
   final bool hydrated;
 
   List<OnlineTtsProfile> get effectiveProfiles =>
@@ -361,6 +393,9 @@ class TtsConfigState {
     Map<String, String>? secrets,
     bool? fallbackToLocalTts,
     bool? sleepAtChapterEnd,
+    bool? cacheEnabled,
+    int? cacheMaxMb,
+    int? prefetchCount,
     bool? hydrated,
   }) {
     return TtsConfigState(
@@ -370,6 +405,9 @@ class TtsConfigState {
       secrets: secrets ?? this.secrets,
       fallbackToLocalTts: fallbackToLocalTts ?? this.fallbackToLocalTts,
       sleepAtChapterEnd: sleepAtChapterEnd ?? this.sleepAtChapterEnd,
+      cacheEnabled: cacheEnabled ?? this.cacheEnabled,
+      cacheMaxMb: cacheMaxMb ?? this.cacheMaxMb,
+      prefetchCount: prefetchCount ?? this.prefetchCount,
       hydrated: hydrated ?? this.hydrated,
     );
   }
@@ -380,6 +418,9 @@ class TtsConfigState {
         'profiles': effectiveProfiles.map((p) => p.toJson()).toList(),
         'fallbackToLocalTts': fallbackToLocalTts,
         'sleepAtChapterEnd': sleepAtChapterEnd,
+        'cacheEnabled': cacheEnabled,
+        'cacheMaxMb': cacheMaxMb,
+        'prefetchCount': prefetchCount,
       };
 }
 
@@ -403,6 +444,9 @@ class TtsConfigController extends Notifier<TtsConfigState> {
       var activeId = profiles.first.id;
       var fallback = true;
       var chapterEnd = false;
+      var cacheEnabled = true;
+      var cacheMaxMb = 100;
+      var prefetchCount = 2;
 
       if (raw != null && raw.isNotEmpty) {
         final map = jsonDecode(raw) as Map<String, dynamic>;
@@ -418,6 +462,10 @@ class TtsConfigController extends Notifier<TtsConfigState> {
         activeId = map['activeProfileId'] as String? ?? profiles.first.id;
         fallback = map['fallbackToLocalTts'] as bool? ?? true;
         chapterEnd = map['sleepAtChapterEnd'] as bool? ?? false;
+        cacheEnabled = map['cacheEnabled'] as bool? ?? true;
+        cacheMaxMb = ((map['cacheMaxMb'] as num?)?.toInt() ?? 100).clamp(20, 1000);
+        prefetchCount =
+            ((map['prefetchCount'] as num?)?.toInt() ?? 2).clamp(0, 4);
       }
 
       final platform = ref.read(platformBridgeProvider);
@@ -441,6 +489,9 @@ class TtsConfigController extends Notifier<TtsConfigState> {
         secrets: secrets,
         fallbackToLocalTts: fallback,
         sleepAtChapterEnd: chapterEnd,
+        cacheEnabled: cacheEnabled,
+        cacheMaxMb: cacheMaxMb,
+        prefetchCount: prefetchCount,
         hydrated: true,
       );
     } catch (_) {
@@ -476,6 +527,30 @@ class TtsConfigController extends Notifier<TtsConfigState> {
   Future<void> setSleepAtChapterEnd(bool value) async {
     _userMutated = true;
     state = state.copyWith(sleepAtChapterEnd: value, hydrated: true);
+    await _persist();
+  }
+
+  Future<void> setCacheEnabled(bool value) async {
+    _userMutated = true;
+    state = state.copyWith(cacheEnabled: value, hydrated: true);
+    await _persist();
+  }
+
+  Future<void> setCacheMaxMb(int maxMb) async {
+    _userMutated = true;
+    state = state.copyWith(
+      cacheMaxMb: maxMb.clamp(20, 1000),
+      hydrated: true,
+    );
+    await _persist();
+  }
+
+  Future<void> setPrefetchCount(int count) async {
+    _userMutated = true;
+    state = state.copyWith(
+      prefetchCount: count.clamp(0, 4),
+      hydrated: true,
+    );
     await _persist();
   }
 

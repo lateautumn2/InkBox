@@ -49,6 +49,8 @@ class _TestPlatformBridge implements PlatformBridge {
   @override
   Future<void> setScreenBrightness(double? brightness) async {}
   @override
+  Future<double?> getScreenBrightness() async => 0.55;
+  @override
   Future<void> setVolumeKeyPaging(bool enabled) async {}
   @override
   Future<String?> speakText(

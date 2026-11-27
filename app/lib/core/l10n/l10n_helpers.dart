@@ -183,9 +183,20 @@ extension MangaTapLayoutL10n on MangaTapLayout {
       };
 }
 
+extension TapZoneActionL10n on TapZoneAction {
+  String labelOf(AppLocalizations l10n) => switch (this) {
+        TapZoneAction.prevPage => l10n.tapActionPrev,
+        TapZoneAction.nextPage => l10n.tapActionNext,
+        TapZoneAction.toggleMenu => l10n.tapActionMenu,
+        TapZoneAction.bookmark => l10n.tapActionBookmark,
+        TapZoneAction.tts => l10n.tapActionTts,
+      };
+}
+
 extension OnlineTtsProviderKindL10n on OnlineTtsProviderKind {
   String labelOf(AppLocalizations l10n) => switch (this) {
         OnlineTtsProviderKind.edgeTts => l10n.ttsProviderEdge,
+        OnlineTtsProviderKind.azureSpeech => l10n.ttsProviderAzure,
         OnlineTtsProviderKind.openAiCompatible => l10n.ttsProviderOpenAi,
         OnlineTtsProviderKind.customHttp => l10n.ttsProviderCustomHttp,
       };

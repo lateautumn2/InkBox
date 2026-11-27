@@ -1,4 +1,5 @@
 import 'dart:math' as math;
+import 'dart:ui' as ui;
 
 import 'package:material_ui/material_ui.dart';
 
@@ -47,6 +48,11 @@ class PageTurnStage extends StatefulWidget {
     this.onInterceptTap,
     this.selectionActive = false,
     this.isDualSpread = false,
+    this.enableEdgeVerticalDrag = false,
+    this.edgeZoneWidth = 56.0,
+    this.onEdgeVerticalDragUpdate,
+    this.onEdgeVerticalDragEnd,
+    this.onSwipeUpAction,
   });
 
   final PageTurnMode mode;
@@ -64,6 +70,12 @@ class PageTurnStage extends StatefulWidget {
   final bool Function(Offset globalPosition)? onInterceptTap;
   final bool selectionActive;
   final bool isDualSpread;
+  final bool enableEdgeVerticalDrag;
+  final double edgeZoneWidth;
+  final void Function(double deltaY, double viewportHeight)?
+      onEdgeVerticalDragUpdate;
+  final VoidCallback? onEdgeVerticalDragEnd;
+  final VoidCallback? onSwipeUpAction;
 
   bool get effectiveCanTurnNext => canTurnNext ?? (nextPage != null);
   bool get effectiveCanTurnPrev => canTurnPrev ?? (previousPage != null);
@@ -72,11 +84,14 @@ class PageTurnStage extends StatefulWidget {
   State<PageTurnStage> createState() => _PageTurnStageState();
 }
 
+enum _VerticalDragMode { none, edgeBrightness, bodySwipeUp }
+
 class _PageTurnStageState extends State<PageTurnStage>
     with SingleTickerProviderStateMixin {
   late final AnimationController _anim;
   double _dragProgress = 0.0; // -1.0 (turn next) .. +1.0 (turn prev)
   double _touchY = 0.62;
+  double _dragStartY = 0.78;
   double _startAnimFrom = 0.0;
   double _targetAnimTo = 0.0;
   Curve _activeCurve = Curves.easeOutCubic;
@@ -84,6 +99,8 @@ class _PageTurnStageState extends State<PageTurnStage>
   bool _isAnimating = false;
   bool _isCommitting = false;
   int _animToken = 0;
+  _VerticalDragMode _verticalMode = _VerticalDragMode.none;
+  double _verticalAccumDy = 0.0;
 
   @override
   void initState() {
@@ -126,7 +143,8 @@ class _PageTurnStageState extends State<PageTurnStage>
       widget.onBoundaryReached?.call(false);
       return false;
     }
-    _touchY = 0.58;
+    _dragStartY = 0.78;
+    _touchY = 0.72;
     _animateTo(
       forward ? -1.0 : 1.0,
       curve: Curves.easeInOutCubic,
@@ -177,7 +195,12 @@ class _PageTurnStageState extends State<PageTurnStage>
     _anim.stop();
     _isAnimating = false;
     _isDragging = true;
-    _touchY = (d.localPosition.dy / size.height).clamp(0.14, 0.86);
+    _verticalMode = _VerticalDragMode.none;
+    final relY = size.height > 0
+        ? (d.localPosition.dy / size.height).clamp(0.06, 0.94)
+        : 0.62;
+    _dragStartY = relY;
+    _touchY = relY;
   }
 
   void _handleDragUpdate(DragUpdateDetails d, Size size) {
@@ -196,8 +219,52 @@ class _PageTurnStageState extends State<PageTurnStage>
 
     setState(() {
       _dragProgress = candidate;
-      _touchY = (d.localPosition.dy / size.height).clamp(0.14, 0.86);
+      _touchY = (d.localPosition.dy / size.height).clamp(0.06, 0.94);
     });
+  }
+
+  void _handleVerticalDragStart(DragStartDetails d, Size size) {
+    if (_isDragging || _isCommitting) {
+      _verticalMode = _VerticalDragMode.none;
+      return;
+    }
+    _verticalAccumDy = 0.0;
+    if (widget.enableEdgeVerticalDrag &&
+        d.localPosition.dx <= widget.edgeZoneWidth) {
+      _verticalMode = _VerticalDragMode.edgeBrightness;
+    } else if (widget.onSwipeUpAction != null) {
+      _verticalMode = _VerticalDragMode.bodySwipeUp;
+    } else {
+      _verticalMode = _VerticalDragMode.none;
+    }
+  }
+
+  void _handleVerticalDragUpdate(DragUpdateDetails d, Size size) {
+    if (_verticalMode == _VerticalDragMode.edgeBrightness) {
+      widget.onEdgeVerticalDragUpdate?.call(d.delta.dy, size.height);
+    } else if (_verticalMode == _VerticalDragMode.bodySwipeUp) {
+      _verticalAccumDy += d.delta.dy;
+    }
+  }
+
+  void _handleVerticalDragEnd(DragEndDetails d) {
+    if (_verticalMode == _VerticalDragMode.edgeBrightness) {
+      widget.onEdgeVerticalDragEnd?.call();
+    } else if (_verticalMode == _VerticalDragMode.bodySwipeUp) {
+      if (_verticalAccumDy <= -56.0 || (d.primaryVelocity ?? 0.0) <= -420.0) {
+        widget.onSwipeUpAction?.call();
+      }
+    }
+    _verticalMode = _VerticalDragMode.none;
+    _verticalAccumDy = 0.0;
+  }
+
+  void _handleVerticalDragCancel() {
+    if (_verticalMode == _VerticalDragMode.edgeBrightness) {
+      widget.onEdgeVerticalDragEnd?.call();
+    }
+    _verticalMode = _VerticalDragMode.none;
+    _verticalAccumDy = 0.0;
   }
 
   void _handleDragEnd(DragEndDetails d) {
@@ -269,6 +336,26 @@ class _PageTurnStageState extends State<PageTurnStage>
           onHorizontalDragEnd: widget.selectionActive ? null : _handleDragEnd,
           onHorizontalDragCancel:
               widget.selectionActive ? null : _handleDragCancel,
+          onVerticalDragStart: widget.selectionActive ||
+                  (!widget.enableEdgeVerticalDrag &&
+                      widget.onSwipeUpAction == null)
+              ? null
+              : (d) => _handleVerticalDragStart(d, size),
+          onVerticalDragUpdate: widget.selectionActive ||
+                  (!widget.enableEdgeVerticalDrag &&
+                      widget.onSwipeUpAction == null)
+              ? null
+              : (d) => _handleVerticalDragUpdate(d, size),
+          onVerticalDragEnd: widget.selectionActive ||
+                  (!widget.enableEdgeVerticalDrag &&
+                      widget.onSwipeUpAction == null)
+              ? null
+              : _handleVerticalDragEnd,
+          onVerticalDragCancel: widget.selectionActive ||
+                  (!widget.enableEdgeVerticalDrag &&
+                      widget.onSwipeUpAction == null)
+              ? null
+              : _handleVerticalDragCancel,
           child: ClipRect(
             child: Stack(
               fit: StackFit.expand,
@@ -437,6 +524,7 @@ class _PageTurnStageState extends State<PageTurnStage>
           size: size,
           foldX: foldX,
           pivotY: _touchY,
+          startY: _dragStartY,
         );
 
         return [
@@ -475,6 +563,7 @@ class _PageTurnStageState extends State<PageTurnStage>
           size: size,
           foldX: foldX,
           pivotY: _touchY,
+          startY: _dragStartY,
         );
         return [
           incoming,
@@ -560,6 +649,7 @@ class _PageTurnStageState extends State<PageTurnStage>
       size: size,
       foldX: foldX,
       pivotY: _touchY,
+      startY: _dragStartY,
     );
     return [
       widget.currentPage,
@@ -599,33 +689,54 @@ class _HorizontalRectClipper extends CustomClipper<Rect> {
       old.left != left || old.right != right;
 }
 
+enum _CurlCorner { topRight, middleEdge, bottomRight }
+
 class _CurlGeometry {
   const _CurlGeometry({
     required this.foldX,
     required this.pivotY,
+    required this.startY,
     required this.edgeFactor,
+    required this.corner,
     required this.xTop,
     required this.xCtrl,
     required this.xBot,
     required this.py,
     required this.foldW,
     required this.shadowW,
+    this.frontPoly = const [],
+    this.backPoly = const [],
+    this.creaseStart = Offset.zero,
+    this.creaseEnd = Offset.zero,
+    this.creaseNormal = const Offset(1, 0),
+    this.flapDepth = 0.0,
+    this.isComplete = false,
   });
 
   final double foldX;
   final double pivotY;
+  final double startY;
   final double edgeFactor;
+  final _CurlCorner corner;
   final double xTop;
   final double xCtrl;
   final double xBot;
   final double py;
   final double foldW;
   final double shadowW;
+  final List<Offset> frontPoly;
+  final List<Offset> backPoly;
+  final Offset creaseStart;
+  final Offset creaseEnd;
+  final Offset creaseNormal;
+  final double flapDepth;
+  final bool isComplete;
 
   factory _CurlGeometry.compute({
     required Size size,
     required double foldX,
     required double pivotY,
+    double startY = 0.5,
   }) {
     final w = size.width <= 0 ? 1.0 : size.width;
     final h = size.height <= 0 ? 1.0 : size.height;
@@ -645,17 +756,220 @@ class _CurlGeometry {
     final foldW = math.min(52.0, peeledWidth * 0.34) * (0.28 + 0.72 * edgeFactor);
     final shadowW = 28.0 * (0.18 + 0.82 * edgeFactor);
 
+    final corner = startY < 0.36
+        ? _CurlCorner.topRight
+        : (startY > 0.64 ? _CurlCorner.bottomRight : _CurlCorner.middleEdge);
+
+    if (corner == _CurlCorner.middleEdge) {
+      return _CurlGeometry(
+        foldX: clampedFoldX,
+        pivotY: pivotY,
+        startY: startY,
+        edgeFactor: edgeFactor,
+        corner: corner,
+        xTop: xTop,
+        xCtrl: xCtrl,
+        xBot: xBot,
+        py: py,
+        foldW: foldW,
+        shadowW: shadowW,
+      );
+    }
+
+    final pageRect = <Offset>[
+      Offset.zero,
+      Offset(w, 0),
+      Offset(w, h),
+      Offset(0, h),
+    ];
+
+    if (norm >= 0.998) {
+      return _CurlGeometry(
+        foldX: clampedFoldX,
+        pivotY: pivotY,
+        startY: startY,
+        edgeFactor: edgeFactor,
+        corner: corner,
+        xTop: xTop,
+        xCtrl: xCtrl,
+        xBot: xBot,
+        py: py,
+        foldW: foldW,
+        shadowW: shadowW,
+        frontPoly: pageRect,
+      );
+    }
+
+    if (norm <= 0.002) {
+      return _CurlGeometry(
+        foldX: clampedFoldX,
+        pivotY: pivotY,
+        startY: startY,
+        edgeFactor: edgeFactor,
+        corner: corner,
+        xTop: xTop,
+        xCtrl: xCtrl,
+        xBot: xBot,
+        py: py,
+        foldW: foldW,
+        shadowW: shadowW,
+        isComplete: true,
+      );
+    }
+
+    final peelDist = (w - clampedFoldX).clamp(0.0, w);
+    final ax = w - peelDist * 2.05;
+    final Offset anchorCorner;
+    final Offset foldedCorner;
+    if (corner == _CurlCorner.topRight) {
+      final targetDrop = (pivotY * h).clamp(28.0, h * 0.72);
+      final ay = (math.min(targetDrop, peelDist * 0.85 + targetDrop * 0.35) *
+              edgeFactor)
+          .clamp(0.0, h * 0.75);
+      anchorCorner = Offset(w, 0);
+      foldedCorner = Offset(ax, ay);
+    } else {
+      final targetLift = ((1.0 - pivotY) * h).clamp(28.0, h * 0.72);
+      final ay = h -
+          (math.min(targetLift, peelDist * 0.85 + targetLift * 0.35) *
+                  edgeFactor)
+              .clamp(0.0, h * 0.75);
+      anchorCorner = Offset(w, h);
+      foldedCorner = Offset(ax, ay);
+    }
+
+    final diff = anchorCorner - foldedCorner;
+    final len = diff.distance <= 1e-4 ? 1.0 : diff.distance;
+    final n = Offset(diff.dx / len, diff.dy / len);
+    final g = Offset(
+      (anchorCorner.dx + foldedCorner.dx) * 0.5,
+      (anchorCorner.dy + foldedCorner.dy) * 0.5,
+    );
+
+    double signedDist(Offset p) => (p.dx - g.dx) * n.dx + (p.dy - g.dy) * n.dy;
+
+    final frontPoly = _clipHalfPlane(pageRect, (p) => signedDist(p) <= 1e-3, (a, b) {
+      final da = signedDist(a);
+      final db = signedDist(b);
+      final denom = da - db;
+      final t = denom.abs() < 1e-6 ? 0.5 : (da / denom).clamp(0.0, 1.0);
+      return Offset(a.dx + (b.dx - a.dx) * t, a.dy + (b.dy - a.dy) * t);
+    });
+
+    final peeledPoly = _clipHalfPlane(pageRect, (p) => signedDist(p) >= -1e-3, (a, b) {
+      final da = signedDist(a);
+      final db = signedDist(b);
+      final denom = da - db;
+      final t = denom.abs() < 1e-6 ? 0.5 : (da / denom).clamp(0.0, 1.0);
+      return Offset(a.dx + (b.dx - a.dx) * t, a.dy + (b.dy - a.dy) * t);
+    });
+
+    var reflected = peeledPoly.map((p) {
+      final d = signedDist(p);
+      return Offset(p.dx - 2 * d * n.dx, p.dy - 2 * d * n.dy);
+    }).toList();
+    reflected = _clipRect(reflected, w, h);
+
+    // Determine crease segment inside front rect and max flap depth along -n.
+    final creasePts = frontPoly.where((p) => signedDist(p).abs() <= 0.75).toList();
+    final Offset c0;
+    final Offset c1;
+    if (creasePts.length >= 2) {
+      c0 = creasePts.first;
+      c1 = creasePts.last;
+    } else {
+      c0 = Offset(clampedFoldX, 0);
+      c1 = Offset(clampedFoldX, h);
+    }
+
+    var maxDepth = 0.0;
+    for (final p in reflected) {
+      final d = -signedDist(p);
+      if (d > maxDepth) maxDepth = d;
+    }
+
     return _CurlGeometry(
       foldX: clampedFoldX,
       pivotY: pivotY,
+      startY: startY,
       edgeFactor: edgeFactor,
+      corner: corner,
       xTop: xTop,
       xCtrl: xCtrl,
       xBot: xBot,
       py: py,
       foldW: foldW,
       shadowW: shadowW,
+      frontPoly: frontPoly,
+      backPoly: reflected,
+      creaseStart: c0,
+      creaseEnd: c1,
+      creaseNormal: n,
+      flapDepth: maxDepth,
     );
+  }
+
+  static List<Offset> _clipHalfPlane(
+    List<Offset> poly,
+    bool Function(Offset p) inside,
+    Offset Function(Offset a, Offset b) intersect,
+  ) {
+    if (poly.isEmpty) return const [];
+    final out = <Offset>[];
+    for (var i = 0; i < poly.length; i++) {
+      final curr = poly[i];
+      final prev = poly[(i + poly.length - 1) % poly.length];
+      final currIn = inside(curr);
+      final prevIn = inside(prev);
+      if (currIn) {
+        if (!prevIn) out.add(intersect(prev, curr));
+        out.add(curr);
+      } else if (prevIn) {
+        out.add(intersect(prev, curr));
+      }
+    }
+    return out;
+  }
+
+  static List<Offset> _clipRect(List<Offset> poly, double w, double h) {
+    var out = poly;
+    out = _clipHalfPlane(
+      out,
+      (p) => p.dx >= -1e-3,
+      (a, b) {
+        final denom = b.dx - a.dx;
+        final t = denom.abs() < 1e-6 ? 0.5 : (-a.dx / denom).clamp(0.0, 1.0);
+        return Offset(0, a.dy + (b.dy - a.dy) * t);
+      },
+    );
+    out = _clipHalfPlane(
+      out,
+      (p) => p.dx <= w + 1e-3,
+      (a, b) {
+        final denom = b.dx - a.dx;
+        final t = denom.abs() < 1e-6 ? 0.5 : ((w - a.dx) / denom).clamp(0.0, 1.0);
+        return Offset(w, a.dy + (b.dy - a.dy) * t);
+      },
+    );
+    out = _clipHalfPlane(
+      out,
+      (p) => p.dy >= -1e-3,
+      (a, b) {
+        final denom = b.dy - a.dy;
+        final t = denom.abs() < 1e-6 ? 0.5 : (-a.dy / denom).clamp(0.0, 1.0);
+        return Offset(a.dx + (b.dx - a.dx) * t, 0);
+      },
+    );
+    out = _clipHalfPlane(
+      out,
+      (p) => p.dy <= h + 1e-3,
+      (a, b) {
+        final denom = b.dy - a.dy;
+        final t = denom.abs() < 1e-6 ? 0.5 : ((h - a.dy) / denom).clamp(0.0, 1.0);
+        return Offset(a.dx + (b.dx - a.dx) * t, h);
+      },
+    );
+    return out;
   }
 }
 
@@ -666,6 +980,16 @@ class _PageCurlClipper extends CustomClipper<Path> {
 
   @override
   Path getClip(Size size) {
+    if (geom.corner != _CurlCorner.middleEdge) {
+      if (geom.isComplete || geom.frontPoly.length < 3) {
+        return Path();
+      }
+      final path = Path()..moveTo(geom.frontPoly.first.dx, geom.frontPoly.first.dy);
+      for (var i = 1; i < geom.frontPoly.length; i++) {
+        path.lineTo(geom.frontPoly[i].dx, geom.frontPoly[i].dy);
+      }
+      return path..close();
+    }
     return Path()
       ..moveTo(0, 0)
       ..lineTo(geom.xTop, 0)
@@ -676,7 +1000,9 @@ class _PageCurlClipper extends CustomClipper<Path> {
 
   @override
   bool shouldReclip(_PageCurlClipper old) =>
-      old.geom.foldX != geom.foldX || old.geom.pivotY != geom.pivotY;
+      old.geom.foldX != geom.foldX ||
+      old.geom.pivotY != geom.pivotY ||
+      old.geom.startY != geom.startY;
 }
 
 class _PageCurlPainter extends CustomPainter {
@@ -695,6 +1021,11 @@ class _PageCurlPainter extends CustomPainter {
     final h = size.height;
     final w = size.width;
     final isDarkPaper = paperColor.computeLuminance() < 0.25;
+
+    if (geom.corner != _CurlCorner.middleEdge) {
+      _paintCornerCurl(canvas, isDarkPaper);
+      return;
+    }
 
     // 1. Curved cast shadow falling onto the revealed underneath page (right of spine)
     if (geom.shadowW > 1.0) {
@@ -812,9 +1143,101 @@ class _PageCurlPainter extends CustomPainter {
     }
   }
 
+  void _paintCornerCurl(Canvas canvas, bool isDarkPaper) {
+    if (geom.isComplete || geom.backPoly.length < 3) return;
+    final c0 = geom.creaseStart;
+    final c1 = geom.creaseEnd;
+    final n = geom.creaseNormal;
+    final midCrease = Offset((c0.dx + c1.dx) * 0.5, (c0.dy + c1.dy) * 0.5);
+
+    // 1. Cast shadow onto the revealed underneath page along +n
+    final sW = 30.0 * (0.2 + 0.8 * geom.edgeFactor);
+    if (sW > 1.0) {
+      final castPath = Path()
+        ..moveTo(c0.dx, c0.dy)
+        ..lineTo(c1.dx, c1.dy)
+        ..lineTo(c1.dx + n.dx * sW, c1.dy + n.dy * sW)
+        ..lineTo(c0.dx + n.dx * sW, c0.dy + n.dy * sW)
+        ..close();
+      final peakAlpha = (isDarkPaper ? 0.50 : 0.28) * geom.edgeFactor;
+      final castPaint = Paint()
+        ..shader = ui.Gradient.linear(
+          midCrease,
+          midCrease + n * sW,
+          [
+            Colors.black.withValues(alpha: peakAlpha),
+            Colors.black.withValues(alpha: peakAlpha * 0.25),
+            Colors.transparent,
+          ],
+          const [0.0, 0.45, 1.0],
+        );
+      canvas.drawPath(castPath, castPaint);
+    }
+
+    // 2. Rolled paper back-face polygon & soft under-flap drop shadow
+    final backPath = Path()..moveTo(geom.backPoly.first.dx, geom.backPoly.first.dy);
+    for (var i = 1; i < geom.backPoly.length; i++) {
+      backPath.lineTo(geom.backPoly[i].dx, geom.backPoly[i].dy);
+    }
+    backPath.close();
+
+    final dropPath = backPath.shift(Offset(-n.dx * 7.0, -n.dy * 7.0));
+    canvas.drawPath(
+      dropPath,
+      Paint()
+        ..color = Colors.black.withValues(alpha: 0.12 * geom.edgeFactor)
+        ..maskFilter = const ui.MaskFilter.blur(ui.BlurStyle.normal, 8),
+    );
+
+    final depth = math.max(12.0, geom.flapDepth);
+    final cCrease = Color.lerp(
+      paperColor,
+      Colors.black,
+      isDarkPaper ? 0.30 : 0.16,
+    )!;
+    final cHighlight = Color.lerp(
+      paperColor,
+      Colors.white,
+      isDarkPaper ? 0.16 : 0.38,
+    )!;
+    final cOuter = Color.lerp(
+      paperColor,
+      isDarkPaper ? Colors.white : Colors.black,
+      isDarkPaper ? 0.05 : 0.10,
+    )!;
+
+    final flapPaint = Paint()
+      ..shader = ui.Gradient.linear(
+        midCrease,
+        midCrease - n * depth,
+        [cCrease, cHighlight, paperColor, cOuter],
+        const [0.0, 0.28, 0.68, 1.0],
+      );
+    canvas.drawPath(backPath, flapPaint);
+
+    // Subtle hairline along the crease & outer peeled edge
+    canvas.drawPath(
+      backPath,
+      Paint()
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 0.7
+        ..color = (isDarkPaper ? Colors.white : Colors.black)
+            .withValues(alpha: 0.10 * geom.edgeFactor),
+    );
+    canvas.drawLine(
+      c0,
+      c1,
+      Paint()
+        ..strokeWidth = 0.9
+        ..color = (isDarkPaper ? Colors.white : Colors.black)
+            .withValues(alpha: 0.16 * geom.edgeFactor),
+    );
+  }
+
   @override
   bool shouldRepaint(_PageCurlPainter old) =>
       old.geom.foldX != geom.foldX ||
       old.geom.pivotY != geom.pivotY ||
+      old.geom.startY != geom.startY ||
       old.paperColor != paperColor;
 }

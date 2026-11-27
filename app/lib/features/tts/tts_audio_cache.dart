@@ -14,6 +14,7 @@ class TtsAudioCache {
 
   final String? overrideDirPath;
   final int maxBytes;
+  static int _liveSlot = 0;
 
   Future<Directory> _cacheDir() async {
     if (overrideDirPath != null) {
@@ -55,15 +56,40 @@ class TtsAudioCache {
     return null;
   }
 
-  Future<File> putBytes(String cacheKey, String ext, List<int> bytes) async {
+  Future<File> putBytes(
+    String cacheKey,
+    String ext,
+    List<int> bytes, {
+    int? maxBytesOverride,
+  }) async {
     final dir = await _cacheDir();
     final f = File(p.join(dir.path, '$cacheKey.$ext'));
     await f.writeAsBytes(bytes, flush: true);
-    await _evictIfNeeded(dir);
+    await _evictIfNeeded(dir, maxBytesOverride ?? maxBytes);
     return f;
   }
 
-  Future<void> _evictIfNeeded(Directory dir) async {
+  /// Writes non-cached playback bytes to a bounded 4-slot rotating temp ring so
+  /// disabling cache avoids persistent storage growth.
+  Future<File> writeEphemeralFile(String ext, List<int> bytes) async {
+    final base = await _cacheDir();
+    final liveDir = Directory('${base.path}_live');
+    await liveDir.create(recursive: true);
+    final slot = _liveSlot % 4;
+    _liveSlot = (_liveSlot + 1) & 0x7FFFFFFF;
+    final f = File(p.join(liveDir.path, 'live_$slot.$ext'));
+    await f.writeAsBytes(bytes, flush: true);
+    return f;
+  }
+
+  Future<void> enforceMaxBytes(int limitBytes) async {
+    try {
+      final dir = await _cacheDir();
+      await _evictIfNeeded(dir, limitBytes);
+    } catch (_) {}
+  }
+
+  Future<void> _evictIfNeeded(Directory dir, int limitBytes) async {
     try {
       final entries = <({File file, DateTime modified, int size})>[];
       var total = 0;
@@ -74,10 +100,10 @@ class TtsAudioCache {
           total += st.size;
         }
       }
-      if (total <= maxBytes) return;
+      if (total <= limitBytes) return;
       entries.sort((a, b) => a.modified.compareTo(b.modified));
       for (final e in entries) {
-        if (total <= (maxBytes * 0.8).round()) break;
+        if (total <= (limitBytes * 0.8).round()) break;
         try {
           await e.file.delete();
           total -= e.size;

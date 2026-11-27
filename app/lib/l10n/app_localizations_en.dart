@@ -1341,13 +1341,69 @@ class AppLocalizationsEn extends AppLocalizations {
   String get ttsImportLegado => 'Import Legado JSON';
 
   @override
-  String get ttsProviderEdge => 'Edge TTS';
+  String get ttsProviderEdge => 'Microsoft Read Aloud (Edge)';
+
+  @override
+  String get ttsProviderAzure => 'Azure Speech TTS';
 
   @override
   String get ttsProviderOpenAi => 'OpenAI Compatible';
 
   @override
   String get ttsProviderCustomHttp => 'Custom HTTP';
+
+  @override
+  String get ttsEdgeGatewayProtocolLabel => 'Gateway protocol';
+
+  @override
+  String get ttsEdgeGatewayGet => 'GET Query (tts-server)';
+
+  @override
+  String get ttsEdgeGatewayRaSsml => 'SSML POST (ms-ra-forwarder)';
+
+  @override
+  String get ttsAzureRegionLabel => 'Region (e.g. eastus)';
+
+  @override
+  String get ttsCacheSettingsTitle => 'Cache & Prefetch';
+
+  @override
+  String get ttsCacheEnableLabel => 'Enable audio cache';
+
+  @override
+  String get ttsCacheMaxMbLabel => 'Cache limit';
+
+  @override
+  String get ttsPrefetchCountLabel => 'Prefetch sentences';
+
+  @override
+  String get ttsPrefetchOff => 'Off';
+
+  @override
+  String ttsPrefetchUnit(int count) {
+    return '$count';
+  }
+
+  @override
+  String get tapZoneSectionLabel => 'Tap zones (tap cells to customize)';
+
+  @override
+  String get tapActionPrev => 'Prev';
+
+  @override
+  String get tapActionNext => 'Next';
+
+  @override
+  String get tapActionMenu => 'Menu';
+
+  @override
+  String get tapActionBookmark => 'Bookmark';
+
+  @override
+  String get tapActionTts => 'Listen';
+
+  @override
+  String get autoScrollSpeedLabel => 'Scroll speed';
 
   @override
   String get ttsProfileNameLabel => 'Profile Name';

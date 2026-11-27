@@ -1337,13 +1337,69 @@ class AppLocalizationsJa extends AppLocalizations {
   String get ttsImportLegado => 'Legado JSON 取込';
 
   @override
-  String get ttsProviderEdge => 'Edge TTS';
+  String get ttsProviderEdge => 'Microsoft 音声読み上げ (Edge)';
+
+  @override
+  String get ttsProviderAzure => 'Azure 音声サービス';
 
   @override
   String get ttsProviderOpenAi => 'OpenAI 互換';
 
   @override
   String get ttsProviderCustomHttp => 'カスタム HTTP';
+
+  @override
+  String get ttsEdgeGatewayProtocolLabel => 'ゲートウェイ方式';
+
+  @override
+  String get ttsEdgeGatewayGet => 'GET クエリ (tts-server)';
+
+  @override
+  String get ttsEdgeGatewayRaSsml => 'SSML POST (ms-ra-forwarder)';
+
+  @override
+  String get ttsAzureRegionLabel => 'リージョン (例: japaneast)';
+
+  @override
+  String get ttsCacheSettingsTitle => 'キャッシュと先読み';
+
+  @override
+  String get ttsCacheEnableLabel => '音声キャッシュを有効化';
+
+  @override
+  String get ttsCacheMaxMbLabel => 'キャッシュ上限';
+
+  @override
+  String get ttsPrefetchCountLabel => '先読み文数';
+
+  @override
+  String get ttsPrefetchOff => 'オフ';
+
+  @override
+  String ttsPrefetchUnit(int count) {
+    return '$count 文';
+  }
+
+  @override
+  String get tapZoneSectionLabel => 'タップ領域（セルをタップして変更）';
+
+  @override
+  String get tapActionPrev => '前へ';
+
+  @override
+  String get tapActionNext => '次へ';
+
+  @override
+  String get tapActionMenu => 'メニュー';
+
+  @override
+  String get tapActionBookmark => 'しおり';
+
+  @override
+  String get tapActionTts => '朗読';
+
+  @override
+  String get autoScrollSpeedLabel => 'スクロール速度';
 
   @override
   String get ttsProfileNameLabel => 'プロファイル名';
