@@ -5,6 +5,7 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart' show visibleForTesting;
 
 import 'tts_audio_cache.dart';
 import 'tts_models.dart';
@@ -47,7 +48,7 @@ class OnlineTtsClient {
   final TtsAudioCache _cache;
   final HttpClient Function() _httpClientFactory;
 
-  static const _edgeToken = '6A5AA1D4EAff4e9fb37e23d68491d6f4';
+  static const _edgeToken = '6A5AA1D4EAFF4E9FB37E23D68491D6F4';
   static const _edgeChromiumVersion = '130.0.2849.68';
   static const _edgeSecMsGecVersion = '1-$_edgeChromiumVersion';
   static const Duration _defaultTimeout = Duration(seconds: 10);
@@ -638,7 +639,11 @@ class OnlineTtsClient {
     var ticks =
         (DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000) + winEpochOffsetSec;
     ticks -= ticks % 300;
-    final winTicks = ticks * 10000000;
+    return debugSecMsGecForTicks(ticks * 10000000);
+  }
+
+  @visibleForTesting
+  static String debugSecMsGecForTicks(int winTicks) {
     final hashInput = '$winTicks$_edgeToken';
     return sha256.convert(ascii.encode(hashInput)).toString().toUpperCase();
   }

@@ -38,8 +38,8 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
 
   static const _timerPresets = [0, 15, 30, 60];
 
-  final OnlineTtsClient _onlineClient = OnlineTtsClient();
   final TtsAudioCache _cache = TtsAudioCache();
+  late final OnlineTtsClient _onlineClient = OnlineTtsClient(cache: _cache);
 
   List<TtsEngineOption> _engines = const [];
   List<TtsVoiceOption> _localVoices = const [];
@@ -51,6 +51,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
 
   String? _activePreviewUtteranceId;
   String? _activePreviewPlaybackId;
+  String? _activePreviewAudioPath;
   StreamSubscription<PlatformEvent>? _eventSub;
   late final PlatformBridge _platform;
 
@@ -97,6 +98,11 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
             pid != _activePreviewPlaybackId) {
           return;
         }
+        final finishedPath = _activePreviewAudioPath;
+        _activePreviewAudioPath = null;
+        if (finishedPath != null) {
+          unawaited(_cache.deleteEphemeralFile(finishedPath));
+        }
         setState(() {
           _activePreviewPlaybackId = null;
           _previewPlaying = false;
@@ -116,9 +122,14 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     _voiceCtrl.dispose();
     _headersCtrl.dispose();
     _bodyCtrl.dispose();
+    final leftoverPath = _activePreviewAudioPath;
+    _activePreviewAudioPath = null;
     if (_previewPlaying) {
       _platform.stopTts();
       _platform.stopAudio();
+    }
+    if (leftoverPath != null) {
+      unawaited(_cache.deleteEphemeralFile(leftoverPath));
     }
     super.dispose();
   }
@@ -226,8 +237,13 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   Future<void> _stopActivePreview() async {
     _activePreviewUtteranceId = null;
     _activePreviewPlaybackId = null;
+    final prevAudio = _activePreviewAudioPath;
+    _activePreviewAudioPath = null;
     await _platform.stopTts();
     await _platform.stopAudio();
+    if (prevAudio != null) {
+      await _cache.deleteEphemeralFile(prevAudio);
+    }
     if (mounted && _previewPlaying) {
       setState(() => _previewPlaying = false);
     }
@@ -295,13 +311,19 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     final res = await _onlineClient.testConnection(
       profile: profile,
       sampleText: sample,
-      rate: settings.ttsRate,
+      // Synthesize at 1.0x and apply settings.ttsRate once in MediaPlayer.
+      rate: 1.0,
       pitch: settings.ttsPitch,
       apiKey: apiKey,
       enableCache: cfg.cacheEnabled,
       maxCacheBytes: cfg.cacheMaxMb * 1024 * 1024,
     );
-    if (!mounted) return;
+    if (!mounted) {
+      if (res.audioPath != null) {
+        unawaited(_cache.deleteEphemeralFile(res.audioPath!));
+      }
+      return;
+    }
 
     setState(() {
       _testingConnection = false;
@@ -311,8 +333,10 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
 
     if (res.ok && res.audioPath != null) {
       final pid = 'preview_${DateTime.now().millisecondsSinceEpoch}';
+      final prevAudio = _activePreviewAudioPath;
       setState(() {
         _activePreviewPlaybackId = pid;
+        _activePreviewAudioPath = res.audioPath;
         _previewPlaying = true;
       });
       final started = await platform.playAudioFile(
@@ -320,7 +344,12 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
         speed: settings.ttsRate,
         playbackId: pid,
       );
+      if (prevAudio != null && prevAudio != res.audioPath) {
+        unawaited(_cache.deleteEphemeralFile(prevAudio));
+      }
       if (!started && mounted) {
+        _activePreviewAudioPath = null;
+        unawaited(_cache.deleteEphemeralFile(res.audioPath!));
         setState(() {
           _activePreviewPlaybackId = null;
           _previewPlaying = false;

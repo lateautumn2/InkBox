@@ -448,6 +448,57 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
+  /// Atomically applies a synced or restored progress record without overwriting
+  /// its authoritative timestamp, sync timestamp, or device identity.
+  Future<void> applySyncedBookProgress({
+    required String contentHash,
+    required String mediaKind,
+    required String locator,
+    required double progressRatio,
+    required int updatedAtMs,
+    required int lastSyncedAtMs,
+    required String deviceId,
+    required String deviceName,
+  }) async {
+    final clamped = progressRatio.clamp(0.0, 1.0);
+    await transaction(() async {
+      await upsertSyncState(
+        SyncStatesCompanion.insert(
+          contentHash: contentHash,
+          mediaKind: mediaKind,
+          locator: locator,
+          progressRatio: Value(clamped),
+          updatedAtMs: updatedAtMs,
+          lastSyncedAtMs: Value(lastSyncedAtMs),
+          deviceId: deviceId,
+          deviceName: deviceName,
+        ),
+      );
+
+      if (mediaKind == 'book') {
+        final book = await findBookByHash(contentHash);
+        if (book != null) {
+          final chMatch = RegExp(r'ch:(\d+)').firstMatch(locator);
+          final offMatch = RegExp(r'off:(\d+)').firstMatch(locator);
+          final nextCh = int.tryParse(chMatch?.group(1) ?? '') ??
+              book.currentChapterIndex;
+          final nextOff =
+              int.tryParse(offMatch?.group(1) ?? '') ?? book.currentCharOffset;
+          await (update(books)..where((t) => t.id.equals(book.id))).write(
+            BooksCompanion(
+              currentChapterIndex: Value(nextCh),
+              currentCharOffset: Value(nextOff),
+              progressRatio: Value(clamped),
+              lastReadAtMs: Value(
+                updatedAtMs > book.lastReadAtMs ? updatedAtMs : book.lastReadAtMs,
+              ),
+            ),
+          );
+        }
+      }
+    });
+  }
+
   Future<void> updateBookMeta(
     int id, {
     String? title,

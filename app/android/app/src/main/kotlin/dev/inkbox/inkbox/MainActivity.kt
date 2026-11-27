@@ -961,10 +961,17 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
 
     private fun transferBackup(uri: Uri, file: File, exporting: Boolean, result: MethodChannel.Result) {
         Thread {
+            val existedWithContent = if (exporting) {
+                runCatching {
+                    DocumentFile.fromSingleUri(this, uri)?.length()?.let { it > 0L } == true
+                }.getOrDefault(false)
+            } else {
+                false
+            }
             try {
                 if (exporting) {
                     file.inputStream().use { input ->
-                        val output = contentResolver.openOutputStream(uri, "w")
+                        val output = openTruncatedOutputStream(uri)
                             ?: error("Could not open the backup destination")
                         output.use { input.copyTo(it, 64 * 1024) }
                     }
@@ -977,12 +984,45 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                 }
                 mainHandler.post { result.success(true) }
             } catch (error: Exception) {
-                if (exporting) {
+                if (exporting && !existedWithContent) {
                     runCatching { DocumentsContract.deleteDocument(contentResolver, uri) }
                 }
                 mainHandler.post { result.error("BACKUP_IO", error.message, null) }
             }
         }.start()
+    }
+
+    private fun openTruncatedOutputStream(uri: Uri): java.io.OutputStream? {
+        try {
+            contentResolver.openOutputStream(uri, "wt")?.let { return it }
+        } catch (_: IllegalArgumentException) {
+        } catch (_: UnsupportedOperationException) {
+        }
+        val pfd = try {
+            contentResolver.openFileDescriptor(uri, "rw")
+        } catch (_: Exception) {
+            null
+        } ?: return null
+        return try {
+            val fos = java.io.FileOutputStream(pfd.fileDescriptor)
+            fos.channel.truncate(0L)
+            object : java.io.FilterOutputStream(fos) {
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    out.write(b, off, len)
+                }
+
+                override fun close() {
+                    try {
+                        super.close()
+                    } finally {
+                        pfd.close()
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            runCatching { pfd.close() }
+            throw e
+        }
     }
 
     private data class StagedCopyResult(val file: File?, val error: String? = null)

@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inkbox/core/l10n/l10n_helpers.dart';
@@ -23,6 +24,7 @@ import 'package:inkbox/features/tts/tts_audio_cache.dart';
 import 'package:inkbox/features/tts/tts_models.dart';
 import 'package:inkbox/features/tts/tts_playback_controller.dart';
 import 'package:inkbox/features/tts/tts_text_chunker.dart';
+import 'package:inkbox/features/webdav_sync/webdav_sync_service.dart';
 import 'package:inkbox/l10n/app_localizations.dart';
 import 'package:inkbox/main.dart';
 import 'package:material_ui/material_ui.dart';
@@ -37,6 +39,8 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
   final Map<String, String> secureStore = {};
   bool speakShouldFail = false;
   double? lastBrightness;
+  double? lastPlayedSpeed;
+  double? lastAudioSpeed;
 
   @override
   Stream<PlatformEvent> get events => eventCtrl.stream;
@@ -97,6 +101,7 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
     String? playbackId,
   }) async {
     playedAudioPaths.add(path);
+    lastPlayedSpeed = speed;
     return true;
   }
   @override
@@ -106,7 +111,9 @@ class _RedesignMockPlatformBridge implements PlatformBridge {
   @override
   Future<void> stopAudio() async {}
   @override
-  Future<void> setAudioSpeed(double speed) async {}
+  Future<void> setAudioSpeed(double speed) async {
+    lastAudioSpeed = speed;
+  }
   @override
   Future<void> saveSecret(String key, String value) async =>
       secureStore[key] = value;
@@ -1057,7 +1064,7 @@ void main() {
               paperColor: Colors.white,
               onTurnNext: () => turns++,
               onTurnPrev: () {},
-              onTapNormalized: (_, __) {},
+              onTapNormalized: (_, _) {},
             ),
           ),
         ),
@@ -1177,6 +1184,10 @@ void main() {
       expect(raFormatHeader, 'audio-24khz-48kbitrate-mono-mp3');
       expect(raBody, contains('zh-CN-YunxiNeural'));
       expect(ephemeral.existsSync(), isTrue);
+      expect(tmpCache.listSync(), isEmpty);
+      expect(await cache.totalSizeBytes(), greaterThan(0));
+      await cache.clear();
+      expect(ephemeral.existsSync(), isFalse);
       expect(await cache.totalSizeBytes(), 0);
 
       // Config persistence for cacheEnabled / cacheMaxMb / prefetchCount
@@ -1196,6 +1207,162 @@ void main() {
       expect(cfg.cacheMaxMb, 250);
       expect(cfg.prefetchCount, 3);
       await platform.eventCtrl.close();
+    });
+
+    test('P0 regressions: single-side rate, uppercase Edge token, non-overwriting _live files, and WebDAV SyncState preservation', () async {
+      final prevHttpOverrides = HttpOverrides.current;
+      HttpOverrides.global = null;
+      addTearDown(() => HttpOverrides.global = prevHttpOverrides);
+
+      // P0-2: Edge Sec-MS-GEC must hash using uppercase TRUSTED_CLIENT_TOKEN
+      const sampleTicks = 133700000000000000;
+      final expectedGec = sha256
+          .convert(ascii.encode('${sampleTicks}6A5AA1D4EAFF4E9FB37E23D68491D6F4'))
+          .toString()
+          .toUpperCase();
+      expect(OnlineTtsClient.debugSecMsGecForTicks(sampleTicks), expectedGec);
+
+      // P0-3: Disabled cache writes unique ephemeral files without overwriting active clips & clear() cleans _live
+      final tmpCache = Directory.systemTemp.createTempSync('inkbox_p0_tts_');
+      addTearDown(() async {
+        if (tmpCache.existsSync()) tmpCache.deleteSync(recursive: true);
+        final live = Directory('${tmpCache.path}_live');
+        if (live.existsSync()) live.deleteSync(recursive: true);
+      });
+      final cache = TtsAudioCache(overrideDirPath: tmpCache.path);
+      final ephemeralFiles = <File>[];
+      for (var i = 0; i < 6; i++) {
+        ephemeralFiles.add(
+          await cache.writeEphemeralFile('mp3', [0x49, 0x44, 0x33, i]),
+        );
+      }
+      expect(ephemeralFiles.map((f) => f.path).toSet().length, 6);
+      expect(ephemeralFiles.first.readAsBytesSync(), [0x49, 0x44, 0x33, 0]);
+      expect(await cache.totalSizeBytes(), greaterThan(0));
+      await cache.clear();
+      expect(await cache.totalSizeBytes(), 0);
+      expect(ephemeralFiles.any((f) => f.existsSync()), isFalse);
+
+      // P0-1: Online TTS synthesizes at 1.0x and applies ttsRate once in MediaPlayer playback
+      final sentSpeeds = <double>[];
+      final ttsServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => ttsServer.close(force: true));
+      ttsServer.listen((req) async {
+        final raw = await utf8.decodeStream(req);
+        final decoded = jsonDecode(raw) as Map<String, dynamic>;
+        sentSpeeds.add((decoded['speed'] as num).toDouble());
+        req.response.statusCode = HttpStatus.ok;
+        req.response.headers.contentType = ContentType('audio', 'mpeg');
+        req.response.add([0x49, 0x44, 0x33, sentSpeeds.length]);
+        await req.response.close();
+      });
+
+      final platform = _RedesignMockPlatformBridge();
+      final client = OnlineTtsClient(cache: cache);
+      final ctrl = TtsPlaybackController(platform: platform, onlineClient: client);
+      addTearDown(() async {
+        ctrl.dispose();
+        await platform.eventCtrl.close();
+      });
+
+      final oaiProfile = OnlineTtsProfile(
+        id: 'p0_rate',
+        name: 'RateCheck',
+        kind: OnlineTtsProviderKind.openAiCompatible,
+        endpointUrl: 'http://127.0.0.1:${ttsServer.port}/v1/audio/speech',
+      );
+      await ctrl.startChunks(
+        const [
+          TtsSentenceChunk(index: 0, startOffset: 0, endOffset: 3, text: '第一句'),
+          TtsSentenceChunk(index: 1, startOffset: 3, endOffset: 6, text: '第二句'),
+        ],
+        readerSettings: const BookReaderSettings(ttsRate: 2.0),
+        ttsConfig: TtsConfigState(
+          mode: TtsEngineMode.online,
+          activeProfileId: 'p0_rate',
+          profiles: [oaiProfile],
+          cacheEnabled: false,
+          prefetchCount: 1,
+        ),
+      );
+      expect(sentSpeeds, everyElement(1.0));
+      expect(platform.lastPlayedSpeed, 2.0);
+
+      await ctrl.updateRate(1.5);
+      expect(platform.lastAudioSpeed, 1.5);
+      await ctrl.stop();
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+
+      // P0-5: WebDAV restoreBackupSnapshot preserves authoritative SyncState without dirtying it
+      final db = AppDatabase.inMemory();
+      addTearDown(db.close);
+      final now = DateTime.now().millisecondsSinceEpoch;
+      await db.upsertBook(
+        BooksCompanion.insert(
+          contentHash: 'h1',
+          title: 'WebDAV P0 Test',
+          format: 'TXT',
+          filePath: '/tmp/h1.txt',
+          addedAtMs: now,
+          lastReadAtMs: now,
+        ),
+      );
+
+      final snapBytes = utf8.encode(
+        jsonEncode({
+          'sync/progress_index.json': jsonEncode({
+            'records': {
+              'h1': {
+                'content_hash': 'h1',
+                'media_kind': 'book',
+                'locator': 'ch:2;off:15',
+                'progress_ratio': 0.25,
+                'updated_at_epoch_ms': 1000,
+                'device_id': 'other_dev',
+                'device_name': 'Other Tablet',
+              },
+            },
+          }),
+        }),
+      );
+      final davServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      addTearDown(() => davServer.close(force: true));
+      davServer.listen((req) async {
+        if (req.method == 'GET' && req.uri.path.endsWith('/snap.zip')) {
+          req.response.statusCode = HttpStatus.ok;
+          req.response.add(snapBytes);
+        } else {
+          req.response.statusCode = HttpStatus.notFound;
+        }
+        await req.response.close();
+      });
+
+      final tmpDav = Directory.systemTemp.createTempSync('inkbox_p0_dav_');
+      addTearDown(() {
+        if (tmpDav.existsSync()) tmpDav.deleteSync(recursive: true);
+      });
+      final syncSvc = WebDavSyncService(db: db, tempDirOverride: tmpDav.path);
+      final davCfg = WebDavConfig(
+        serverUrl: 'http://127.0.0.1:${davServer.port}',
+        username: 'u',
+        password: 'p',
+        deviceId: 'local_phone',
+        deviceName: 'Local Phone',
+      );
+      final restored = await syncSvc.restoreBackupSnapshot(davCfg, 'snap.zip');
+      expect(restored, 1);
+
+      final st = await db.getSyncState('h1');
+      expect(st, isNotNull);
+      expect(st!.updatedAtMs, 1000);
+      expect(st.lastSyncedAtMs, greaterThanOrEqualTo(st.updatedAtMs));
+      expect(st.deviceId, 'other_dev');
+      expect(st.deviceName, 'Other Tablet');
+
+      final restoredBook = await db.findBookByHash('h1');
+      expect(restoredBook!.currentChapterIndex, 2);
+      expect(restoredBook.currentCharOffset, 15);
+      expect(restoredBook.progressRatio, closeTo(0.25, 0.001));
     });
   });
 }

@@ -748,34 +748,15 @@ class WebDavSyncService {
     final updatedMs =
         (remote['updated_at_epoch_ms'] as num?)?.toInt() ?? syncedAtMs;
 
-    await db.upsertSyncState(
-      SyncStatesCompanion.insert(
-        contentHash: contentHash,
-        mediaKind: mediaKind,
-        locator: locator,
-        progressRatio: Value(ratio),
-        updatedAtMs: updatedMs,
-        lastSyncedAtMs: Value(syncedAtMs),
-        deviceId: remote['device_id'] as String? ?? 'remote',
-        deviceName: remote['device_name'] as String? ?? '云端设备',
-      ),
+    await db.applySyncedBookProgress(
+      contentHash: contentHash,
+      mediaKind: mediaKind,
+      locator: locator,
+      progressRatio: ratio,
+      updatedAtMs: updatedMs,
+      lastSyncedAtMs: syncedAtMs,
+      deviceId: remote['device_id'] as String? ?? 'remote',
+      deviceName: remote['device_name'] as String? ?? '云端设备',
     );
-
-    if (mediaKind == 'book') {
-      final book = await db.findBookByHash(contentHash);
-      if (book != null) {
-        final chMatch = RegExp(r'ch:(\d+)').firstMatch(locator);
-        final offMatch = RegExp(r'off:(\d+)').firstMatch(locator);
-        await db.updateBookProgress(
-          id: book.id,
-          chapterIndex: int.tryParse(chMatch?.group(1) ?? '') ??
-              book.currentChapterIndex,
-          charOffset: int.tryParse(offMatch?.group(1) ?? '') ??
-              book.currentCharOffset,
-          chapterTitle: book.currentChapterTitle,
-          progressRatio: ratio,
-        );
-      }
-    }
   }
 }
