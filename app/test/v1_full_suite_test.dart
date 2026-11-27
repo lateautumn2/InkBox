@@ -450,7 +450,6 @@ void main() {
       addTearDown(freshDb.close);
       final freshSyncSvc = WebDavSyncService(
         db: freshDb,
-        rustCore: rust,
         tempDirOverride: tmp.path,
       );
       final restored = await freshSyncSvc.restoreBackupSnapshot(cfg, snapName);
@@ -463,6 +462,23 @@ void main() {
       final restoredAnns = await freshDb.getAnnotationsFor('hash_sync_book_1');
       expect(restoredAnns.length, 1);
       expect(restoredAnns.first.noteText, '本地批注');
+
+      final dartSnapshot = await freshSyncSvc.createBackupSnapshot(
+        cfg,
+        preferences: {'book_reader': {'fontSize': 18}},
+      );
+      expect(storage['/InkBox/backups/$dartSnapshot']!.take(2), [0x50, 0x4b]);
+      Map<String, dynamic>? restoredPreferences;
+      await syncSvc.restoreBackupSnapshot(
+        cfg,
+        dartSnapshot,
+        applyPreferences: (prefs) async => restoredPreferences = prefs,
+      );
+      expect(restoredPreferences, {'book_reader': {'fontSize': 18}});
+      await expectLater(
+        syncSvc.restoreBackupSnapshot(cfg, '../outside.zip'),
+        throwsFormatException,
+      );
     });
   });
 
@@ -674,6 +690,7 @@ void main() {
         platform: _FakePlatformBridge(),
         rustCore: rust,
         coversDirOverride: p.join(tmp.path, 'covers'),
+        libraryDirOverride: managedDir.path,
       );
       final imported = await svc.importLocalPathDetailed(
         bookFile.path,
@@ -1212,7 +1229,7 @@ void main() {
           )
           .get();
 
-      expect(userVersionRows.single.data['user_version'], 3);
+      expect(userVersionRows.single.data['user_version'], 4);
       expect(bookShelves.any((s) => s.isDefault && s.name == '默认书架'), isTrue);
       expect(comicShelves.any((s) => s.isDefault && s.name == '默认漫画架'), isTrue);
       expect(books.length, 1);

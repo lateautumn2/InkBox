@@ -21,6 +21,7 @@ class ImportCandidate {
     required this.targetKind, // 'book' | 'comic'
     this.isSafUri = false,
     this.selected = true,
+    this.kindManuallySelected = false,
   });
 
   final String uriOrPath;
@@ -30,6 +31,7 @@ class ImportCandidate {
   String targetKind;
   final bool isSafUri;
   bool selected;
+  bool kindManuallySelected;
 
   String get formattedSize {
     if (sizeBytes < 1024) return '$sizeBytes B';
@@ -98,6 +100,7 @@ class ImportService {
     LibraryStorage? storage,
     this.rustCore,
     this.coversDirOverride,
+    this.libraryDirOverride,
   }) : storage = storage ?? LibraryStorage();
 
   final AppDatabase db;
@@ -105,8 +108,27 @@ class ImportService {
   final LibraryStorage storage;
   final RustCoreBridge? rustCore;
   final String? coversDirOverride;
+  final String? libraryDirOverride;
+  Future<void> _libraryChanges = Future.value();
 
-  static const bookExtensions = {'epub', 'txt', 'pdf', 'mobi', 'azw3', 'fb2', 'md'};
+  Future<T> _serializeChange<T>(Future<T> Function() change) {
+    final result = _libraryChanges.then((_) => change());
+    _libraryChanges = result.then<void>(
+      (_) {},
+      onError: (Object _, StackTrace _) {},
+    );
+    return result;
+  }
+
+  static const bookExtensions = {
+    'epub',
+    'txt',
+    'pdf',
+    'mobi',
+    'azw3',
+    'fb2',
+    'md',
+  };
   static const comicExtensions = {'cbz', 'zip', 'cbr', 'rar', 'cb7', '7z'};
 
   String classifyExtension(String pathOrName, {bool isDirectory = false}) {
@@ -130,13 +152,15 @@ class ImportService {
       throw FileSystemException('ERR_FILE_NOT_FOUND', localPath);
     }
     if (entity == FileSystemEntityType.directory) {
-      final children = Directory(localPath)
-          .listSync()
-          .map((e) => p.basename(e.path))
-          .toList()
-        ..sort();
+      final children =
+          (await Directory(localPath).list(followLinks: false).toList())
+              .map((e) => p.basename(e.path))
+              .toList()
+            ..sort();
       return sha256
-          .convert(utf8.encode('dir:${p.basename(localPath)}:${children.join('|')}'))
+          .convert(
+            utf8.encode('dir:${p.basename(localPath)}:${children.join('|')}'),
+          )
           .toString();
     }
 
@@ -157,7 +181,8 @@ class ImportService {
     final lenBytes = ByteData(8)
       ..setUint32(0, stat.size & 0xFFFFFFFF, Endian.little)
       ..setUint32(4, (stat.size >> 32) & 0xFFFFFFFF, Endian.little);
-    final builder = BytesBuilder(copy: false)..add(lenBytes.buffer.asUint8List());
+    final builder = BytesBuilder(copy: false)
+      ..add(lenBytes.buffer.asUint8List());
 
     final raf = await file.open();
     try {
@@ -211,55 +236,121 @@ class ImportService {
 
   /// Safely deletes app-managed copies (under `library_imports` or `covers`) without
   /// touching user-owned files outside InkBox's managed sandbox.
-  static void cleanupManagedFileIfOwned(String? filePath) {
+  Future<void> _cleanupManagedFileIfOwned(
+    String? filePath, {
+    required bool cover,
+  }) async {
     if (filePath == null || filePath.trim().isEmpty) return;
-    final normalized = p.normalize(filePath).replaceAll('\\', '/');
-    final isManaged = normalized.contains('/library_imports/') ||
-        normalized.contains('/covers/');
-    if (!isManaged) return;
     try {
-      final file = File(filePath);
-      if (file.existsSync()) file.deleteSync();
-    } catch (_) {}
+      final type = await FileSystemEntity.type(filePath, followLinks: false);
+      final entity = switch (type) {
+        FileSystemEntityType.file => File(filePath),
+        FileSystemEntityType.directory when !cover => Directory(filePath),
+        _ => null,
+      };
+      if (entity == null) return;
+      final rootPath = cover
+          ? coversDirOverride ??
+                p.join(
+                  (await getApplicationDocumentsDirectory()).path,
+                  'covers',
+                )
+          : libraryDirOverride ??
+                p.join(
+                  (await getApplicationSupportDirectory()).path,
+                  'library_imports',
+                );
+      if (!await Directory(rootPath).exists()) return;
+      final root = await Directory(rootPath).resolveSymbolicLinks();
+      if (p.isWithin(root, await entity.resolveSymbolicLinks())) {
+        await entity.delete(recursive: type == FileSystemEntityType.directory);
+      }
+    } catch (_) {
+      // The file may already have been removed or the sandbox may be unavailable.
+    }
   }
 
   Future<void> _deleteMedia(String path) async {
+    if (await db.hasMediaReference(path)) return;
     if (LibraryStorage.isDocument(path)) {
-      if (await db.hasMediaReference(path)) return;
       await storage.delete(path);
     } else {
-      cleanupManagedFileIfOwned(path);
+      await _cleanupManagedFileIfOwned(path, cover: false);
+    }
+  }
+
+  Future<void> _deleteUnusedCover(String? path) async {
+    if (path == null) return;
+    final books =
+        await (db.select(db.books)
+              ..where((t) => t.coverPath.equals(path))
+              ..limit(1))
+            .get();
+    if (books.isNotEmpty) return;
+    final mangas =
+        await (db.select(db.mangas)
+              ..where((t) => t.coverPath.equals(path))
+              ..limit(1))
+            .get();
+    if (mangas.isEmpty) await _cleanupManagedFileIfOwned(path, cover: true);
+  }
+
+  Future<PickedDirectory?> chooseWorkingDirectory() =>
+      _serializeChange(() async {
+        final directory = await storage.pickWorkingDirectory();
+        if (directory != null) await _pruneWorkingDirectories();
+        return directory;
+      });
+
+  Future<void> _pruneWorkingDirectories() async {
+    if (!storage.requiresWorkingDirectory) return;
+    final books = await db.getAllBooks(includeArchived: true);
+    final mangas = await db.getAllMangas(includeArchived: true);
+    final chapters = await db.select(db.mangaChapters).get();
+    final watched = await db.getWatchedFolders();
+    try {
+      await storage.pruneWorkingDirectories([
+        ...books.map((book) => book.filePath),
+        ...mangas.map((manga) => manga.rootPath),
+        ...chapters.map((chapter) => chapter.sourcePath),
+      ], watched.map((folder) => folder.uriOrPath).toList());
+    } on Exception {
+      // Retain access if the provider cannot release an unused permission.
     }
   }
 
   /// Permanently removes books from DB & Import History and deletes managed cached copies.
-  Future<void> permanentlyDeleteBooks(Iterable<int> ids) async {
-    final deleted = await db.deleteBooksByIds(ids);
-    for (final book in deleted) {
-      await _deleteMedia(book.filePath);
-      cleanupManagedFileIfOwned(book.coverPath);
-    }
-  }
+  Future<void> permanentlyDeleteBooks(Iterable<int> ids) =>
+      _serializeChange(() async {
+        final deleted = await db.deleteBooksByIds(ids);
+        for (final book in deleted) {
+          await _deleteMedia(book.filePath);
+          await _deleteUnusedCover(book.coverPath);
+        }
+        await _pruneWorkingDirectories();
+      });
 
   /// Permanently removes mangas from DB & Import History and deletes managed cached copies.
-  Future<void> permanentlyDeleteMangas(Iterable<int> ids) async {
-    final chapterPaths = <String>{};
-    for (final id in ids) {
-      final chs = await db.chaptersForManga(id);
-      for (final c in chs) {
-        chapterPaths.add(c.sourcePath);
-      }
-    }
-    final deleted = await db.deleteMangasByIds(ids);
-    for (final manga in deleted) {
-      await _deleteMedia(manga.rootPath);
-      chapterPaths.remove(manga.rootPath);
-      cleanupManagedFileIfOwned(manga.coverPath);
-    }
-    for (final chPath in chapterPaths) {
-      await _deleteMedia(chPath);
-    }
-  }
+  Future<void> permanentlyDeleteMangas(Iterable<int> ids) =>
+      _serializeChange(() async {
+        final chapterPaths = <String>{};
+        for (final id in ids) {
+          final chs = await db.chaptersForManga(id);
+          for (final c in chs) {
+            chapterPaths.add(c.sourcePath);
+          }
+        }
+        final deleted = await db.deleteMangasByIds(ids);
+        for (final manga in deleted) {
+          await _deleteMedia(manga.rootPath);
+          chapterPaths.remove(manga.rootPath);
+          await _deleteUnusedCover(manga.coverPath);
+        }
+        for (final chPath in chapterPaths) {
+          await _deleteMedia(chPath);
+        }
+        await _pruneWorkingDirectories();
+      });
 
   static String _cleanDisplayStem(String rawStem) {
     final cleaned = rawStem.replaceFirst(RegExp(r'_[0-9a-f]{6}$'), '').trim();
@@ -312,10 +403,25 @@ class ImportService {
     String? forceKind,
     bool overwriteExisting = false,
     int? targetShelfId,
+  }) => _serializeChange(
+    () => _importLocalPath(
+      p.normalize(p.absolute(localPath)),
+      forceKind: forceKind,
+      overwriteExisting: overwriteExisting,
+      targetShelfId: targetShelfId,
+    ),
+  );
+
+  Future<ImportFileOutcome> _importLocalPath(
+    String localPath, {
+    required String? forceKind,
+    required bool overwriteExisting,
+    required int? targetShelfId,
   }) async {
     final isDir = FileSystemEntity.isDirectorySync(localPath);
-    final kind = forceKind ?? classifyExtension(localPath, isDirectory: isDir);
-    if (kind == 'unknown') {
+    final detectedKind = classifyExtension(localPath, isDirectory: isDir);
+    final kind = forceKind ?? detectedKind;
+    if (detectedKind == 'unknown' || (kind != 'book' && kind != 'comic')) {
       throw UnsupportedError('ERR_UNSUPPORTED_TYPE: ${p.basename(localPath)}');
     }
     final hash = await _computeFingerprint(localPath);
@@ -324,12 +430,13 @@ class ImportService {
     Future<String> storeMedia() async {
       final paths = await storage.store(localPath);
       storedPaths = paths;
-      return paths[p.absolute(localPath)]!;
+      return paths[localPath]!;
     }
 
+    String? coverPath;
     final ImportFileOutcome result;
     try {
-      result = await db.transaction(() => _updateLibrary(
+      result = await _updateLibrary(
         localPath,
         hash: hash,
         kind: kind,
@@ -338,14 +445,25 @@ class ImportService {
         targetShelfId: targetShelfId,
         storeMedia: storeMedia,
         storedChapterPath: (path) => storage.requiresWorkingDirectory
-            ? storedPaths![p.absolute(path)]!
+            ? storedPaths![p.normalize(p.absolute(path))]!
             : path,
         replacedPaths: replacedPaths,
-      ));
+        extractCover: (path, format) async =>
+            coverPath = await _tryExtractCover(path, format, hash),
+      );
     } catch (_) {
-      final stored = storedPaths?[p.absolute(localPath)];
+      final stored = storedPaths?[localPath];
       if (stored != null && LibraryStorage.isDocument(stored)) {
-        await storage.delete(stored);
+        try {
+          await _deleteMedia(stored);
+        } catch (_) {
+          // Preserve the original import error.
+        }
+      }
+      try {
+        await _deleteUnusedCover(coverPath);
+      } catch (_) {
+        // Preserve the original import error.
       }
       rethrow;
     }
@@ -365,6 +483,7 @@ class ImportService {
     required Future<String> Function() storeMedia,
     required String Function(String path) storedChapterPath,
     required Set<String> replacedPaths,
+    required Future<String?> Function(String, String) extractCover,
   }) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     final stem = _cleanDisplayStem(p.basenameWithoutExtension(localPath));
@@ -378,7 +497,10 @@ class ImportService {
       final existingBroken = dup != null && !await storage.exists(dup.filePath);
       final wasArchived = dup != null && dup.isArchived;
 
-      if (dup != null && !overwriteExisting && !existingBroken && !wasArchived) {
+      if (dup != null &&
+          !overwriteExisting &&
+          !existingBroken &&
+          !wasArchived) {
         return ImportFileOutcome(
           status: 'duplicate',
           kind: 'book',
@@ -401,8 +523,10 @@ class ImportService {
             author = _nonEmptyOr(meta['author'], author);
             final chs = meta['chapters'] as List<dynamic>? ?? const [];
             if (chs.isNotEmpty) {
-              firstChapter =
-                  _nonEmptyOr((chs.first as Map)['title'], firstChapter);
+              firstChapter = _nonEmptyOr(
+                (chs.first as Map)['title'],
+                firstChapter,
+              );
             }
           } else if (ext == 'TXT') {
             final tocRules = await _loadEnabledRustTocRules();
@@ -412,8 +536,10 @@ class ImportService {
             );
             final chs = idx['chapters'] as List<dynamic>? ?? const [];
             if (chs.isNotEmpty) {
-              firstChapter =
-                  _nonEmptyOr((chs.first as Map)['title'], firstChapter);
+              firstChapter = _nonEmptyOr(
+                (chs.first as Map)['title'],
+                firstChapter,
+              );
             }
           } else if (ext == 'PDF') {
             final meta = rustCore!.parsePdfMetadata(localPath);
@@ -421,15 +547,20 @@ class ImportService {
             author = _nonEmptyOr(meta['author'], author);
             final chs = meta['chapters'] as List<dynamic>? ?? const [];
             if (chs.isNotEmpty) {
-              firstChapter =
-                  _nonEmptyOr((chs.first as Map)['title'], firstChapter);
+              firstChapter = _nonEmptyOr(
+                (chs.first as Map)['title'],
+                firstChapter,
+              );
             }
           } else if (ext == 'MOBI' || ext == 'AZW3') {
             final meta = rustCore!.parseMobiMetadata(localPath);
             title = _nonEmptyOr(meta['title'], title);
             author = _nonEmptyOr(meta['author'], author);
           } else if (ext == 'FB2' || ext == 'MD') {
-            final meta = rustCore!.parseStructuredBook(localPath, ext.toLowerCase());
+            final meta = rustCore!.parseStructuredBook(
+              localPath,
+              ext.toLowerCase(),
+            );
             title = _nonEmptyOr(meta['title'], title);
             author = _nonEmptyOr(meta['author'], author);
           }
@@ -440,15 +571,22 @@ class ImportService {
 
       final defaultShelf = await db.ensureDefaultShelf('book');
       final resolvedShelfId = targetShelfId ?? defaultShelf.id;
-      final storedPath = await storeMedia();
-      final coverPath = await _tryExtractCover(localPath, ext, hash);
+      final storedPath =
+          dup != null &&
+              !overwriteExisting &&
+              !existingBroken &&
+              LibraryStorage.isDocument(dup.filePath)
+          ? dup.filePath
+          : await storeMedia();
+      final coverPath = await extractCover(localPath, ext);
       if (dup != null) {
-        final effectiveTitle =
-            dup.title.trim().isNotEmpty && !overwriteExisting ? dup.title : title;
+        final effectiveTitle = dup.title.trim().isNotEmpty && !overwriteExisting
+            ? dup.title
+            : title;
         final effectiveGroup =
             (dup.shelfGroup == '已读完' || dup.progressRatio >= 0.99)
-                ? '已读完'
-                : '在读';
+            ? '已读完'
+            : '在读';
         final oldManagedPath = dup.filePath;
         await db.updateBookMeta(
           dup.id,
@@ -458,13 +596,15 @@ class ImportService {
           coverPath: coverPath ?? dup.coverPath,
           shelfId: targetShelfId ?? dup.shelfId ?? resolvedShelfId,
           shelfGroup: effectiveGroup,
-          currentChapterTitle:
-              dup.currentChapterTitle.trim().isEmpty ? firstChapter : null,
+          currentChapterTitle: dup.currentChapterTitle.trim().isEmpty
+              ? firstChapter
+              : null,
           lastReadAtMs: now,
           isArchived: false,
         );
         if (oldManagedPath != storedPath &&
-            (LibraryStorage.isDocument(oldManagedPath) || p.normalize(oldManagedPath) != p.normalize(storedPath))) {
+            (LibraryStorage.isDocument(oldManagedPath) ||
+                p.normalize(oldManagedPath) != p.normalize(storedPath))) {
           replacedPaths.add(oldManagedPath);
         }
         return ImportFileOutcome(
@@ -507,7 +647,10 @@ class ImportService {
       final existingBroken = dup != null && !await storage.exists(dup.rootPath);
       final wasArchived = dup != null && dup.isArchived;
 
-      if (dup != null && !overwriteExisting && !existingBroken && !wasArchived) {
+      if (dup != null &&
+          !overwriteExisting &&
+          !existingBroken &&
+          !wasArchived) {
         return ImportFileOutcome(
           status: 'duplicate',
           kind: 'comic',
@@ -548,10 +691,15 @@ class ImportService {
             pageCount = (summary['page_count'] as num?)?.toInt() ?? 0;
             final ci = summary['comic_info'] as Map<String, dynamic>?;
             if (ci != null) {
-              title = _nonEmptyOr(ci['series'], _nonEmptyOr(ci['title'], title));
+              title = _nonEmptyOr(
+                ci['series'],
+                _nonEmptyOr(ci['title'], title),
+              );
               author = _nonEmptyOr(ci['writer'], author);
-              readingMode =
-                  _nonEmptyOr(ci['recommended_reading_mode'], readingMode);
+              readingMode = _nonEmptyOr(
+                ci['recommended_reading_mode'],
+                readingMode,
+              );
             }
           } catch (_) {}
         }
@@ -573,99 +721,101 @@ class ImportService {
       final coverFmt = FileSystemEntity.isDirectorySync(coverSource)
           ? 'folder'
           : p.extension(coverSource).replaceFirst('.', '').toLowerCase();
-      final coverPath = await _tryExtractCover(coverSource, coverFmt, hash);
+      final coverPath = await extractCover(coverSource, coverFmt);
 
       final defaultShelf = await db.ensureDefaultShelf('comic');
       final resolvedShelfId = targetShelfId ?? defaultShelf.id;
-      int mangaId;
-      String storedRoot;
-      var shouldReplaceChapters = true;
-      if (dup != null) {
-        mangaId = dup.id;
-        final oldRootPath = dup.rootPath;
-        final existingChapters = await db.chaptersForManga(mangaId);
-        // When restoring an archived manga whose file & chapters are intact (and not overwriting),
-        // preserve per-chapter reading progress instead of wiping MangaChapters.
-        if (wasArchived &&
-            !overwriteExisting &&
-            !existingBroken &&
-            existingChapters.isNotEmpty) {
-          shouldReplaceChapters = false;
-          storedRoot = oldRootPath;
-          await db.updateMangaMeta(
-            mangaId,
-            rootPath: storedRoot,
-            coverPath: coverPath ?? dup.coverPath,
-            shelfId: targetShelfId ?? dup.shelfId ?? resolvedShelfId,
-            lastReadAtMs: now,
-            isArchived: false,
-          );
-        } else {
-          storedRoot = await storeMedia();
-          await db.updateMangaMeta(
-            mangaId,
-            title: overwriteExisting ? title : dup.title,
-            author: overwriteExisting ? author : null,
-            rootPath: storedRoot,
-            coverPath: coverPath ?? dup.coverPath,
-            shelfId: targetShelfId ?? dup.shelfId ?? resolvedShelfId,
-            lastReadAtMs: now,
-            isArchived: false,
-          );
-          if (oldRootPath != storedRoot &&
-              (LibraryStorage.isDocument(oldRootPath) || p.normalize(oldRootPath) != p.normalize(storedRoot))) {
-            replacedPaths.add(oldRootPath);
+      final shouldReplaceChapters =
+          !(dup != null &&
+              wasArchived &&
+              !overwriteExisting &&
+              !existingBroken &&
+              (await db.chaptersForManga(dup.id)).isNotEmpty);
+      final storedRoot = shouldReplaceChapters
+          ? await storeMedia()
+          : dup.rootPath;
+      return db.transaction(() async {
+        int mangaId;
+        if (dup != null) {
+          mangaId = dup.id;
+          final oldRootPath = dup.rootPath;
+          // When restoring an archived manga whose file & chapters are intact (and not overwriting),
+          // preserve per-chapter reading progress instead of wiping MangaChapters.
+          if (!shouldReplaceChapters) {
+            await db.updateMangaMeta(
+              mangaId,
+              rootPath: storedRoot,
+              coverPath: coverPath ?? dup.coverPath,
+              shelfId: targetShelfId ?? dup.shelfId ?? resolvedShelfId,
+              lastReadAtMs: now,
+              isArchived: false,
+            );
+          } else {
+            await db.updateMangaMeta(
+              mangaId,
+              title: overwriteExisting ? title : dup.title,
+              author: overwriteExisting ? author : null,
+              rootPath: storedRoot,
+              coverPath: coverPath ?? dup.coverPath,
+              shelfId: targetShelfId ?? dup.shelfId ?? resolvedShelfId,
+              lastReadAtMs: now,
+              isArchived: false,
+            );
+            if (oldRootPath != storedRoot &&
+                (LibraryStorage.isDocument(oldRootPath) ||
+                    p.normalize(oldRootPath) != p.normalize(storedRoot))) {
+              replacedPaths.add(oldRootPath);
+            }
           }
+        } else {
+          await db.upsertManga(
+            MangasCompanion.insert(
+              contentHash: hash,
+              title: title,
+              author: Value(author),
+              format: ext,
+              rootPath: storedRoot,
+              coverPath: Value(coverPath),
+              shelfId: Value(resolvedShelfId),
+              shelfGroup: const Value('在读'),
+              unreadCount: Value(chaptersToInsert.length),
+              totalChapters: Value(chaptersToInsert.length),
+              preferredReadingMode: Value(readingMode),
+              addedAtMs: now,
+              lastReadAtMs: now,
+            ),
+          );
+          final inserted = await db.findMangaByHash(hash);
+          mangaId = inserted!.id;
         }
-      } else {
-        storedRoot = await storeMedia();
-        await db.upsertManga(
-          MangasCompanion.insert(
-            contentHash: hash,
-            title: title,
-            author: Value(author),
-            format: isDir ? '文件夹' : ext,
-            rootPath: storedRoot,
-            coverPath: Value(coverPath),
-            shelfId: Value(resolvedShelfId),
-            shelfGroup: const Value('在读'),
-            unreadCount: Value(chaptersToInsert.length),
-            totalChapters: Value(chaptersToInsert.length),
-            preferredReadingMode: Value(readingMode),
-            addedAtMs: now,
-            lastReadAtMs: now,
-          ),
-        );
-        final inserted = await db.findMangaByHash(hash);
-        mangaId = inserted!.id;
-      }
 
-      if (shouldReplaceChapters) {
-        await db.replaceMangaChapters(
-          mangaId,
-          chaptersToInsert
-              .map(
-                (c) => MangaChaptersCompanion.insert(
-                  mangaId: mangaId,
-                  title: c.title.value,
-                  chapterIndex: c.chapterIndex.value,
-                  sourcePath: storedChapterPath(c.sourcePath.value),
-                  pageCount: c.pageCount,
-                  updatedAtMs: now,
-                ),
-              )
-              .toList(),
+        if (shouldReplaceChapters) {
+          await db.replaceMangaChapters(
+            mangaId,
+            chaptersToInsert
+                .map(
+                  (c) => MangaChaptersCompanion.insert(
+                    mangaId: mangaId,
+                    title: c.title.value,
+                    chapterIndex: c.chapterIndex.value,
+                    sourcePath: storedChapterPath(c.sourcePath.value),
+                    pageCount: c.pageCount,
+                    updatedAtMs: now,
+                  ),
+                )
+                .toList(),
+          );
+        }
+        return ImportFileOutcome(
+          status: 'manga',
+          kind: 'comic',
+          id: mangaId,
+          title: dup != null && !overwriteExisting ? dup.title : title,
+          shelfGroup: dup?.shelfGroup ?? '在读',
+          localPath: storedRoot,
+          repaired: dup != null,
         );
-      }
-      return ImportFileOutcome(
-        status: 'manga',
-        kind: 'comic',
-        id: mangaId,
-        title: dup != null && !overwriteExisting ? dup.title : title,
-        shelfGroup: dup?.shelfGroup ?? '在读',
-        localPath: storedRoot,
-        repaired: dup != null,
-      );
+      });
     }
   }
 
@@ -677,7 +827,10 @@ class ImportService {
     int? targetMangaShelfId,
   }) async {
     if (!await storage.ensureWorkingDirectory()) return ImportBatchResult.empty;
-    final picked = await platform.pickDocumentsDetailed();
+    final bridge = platform;
+    final picked = await (bridge is MethodChannelPlatformBridge
+        ? bridge.pickDocumentUris()
+        : bridge.pickDocumentsDetailed());
     var books = 0;
     var mangas = 0;
     var skipped = 0;
@@ -685,9 +838,15 @@ class ImportService {
     final importedItems = <ImportFileOutcome>[];
     final duplicateItems = <ImportFileOutcome>[];
 
-    for (final filePath in picked.paths) {
+    for (final reference in picked.paths) {
+      final isDocument = LibraryStorage.isDocument(reference);
+      String? filePath;
       var keepForOverwrite = false;
       try {
+        filePath = isDocument
+            ? await platform.stageDocumentUri(reference)
+            : reference;
+        if (filePath == null) throw StateError('ERR_STREAM_OPEN');
         final isDir = FileSystemEntity.isDirectorySync(filePath);
         final resolvedKind = autoClassify
             ? classifyExtension(filePath, isDirectory: isDir)
@@ -696,8 +855,9 @@ class ImportService {
           filePath,
           forceKind: autoClassify ? null : 'book',
           overwriteExisting: overwriteExisting,
-          targetShelfId:
-              resolvedKind == 'comic' ? targetMangaShelfId : targetBookShelfId,
+          targetShelfId: resolvedKind == 'comic'
+              ? targetMangaShelfId
+              : targetBookShelfId,
         );
         if (outcome.status == 'book') {
           books++;
@@ -707,13 +867,26 @@ class ImportService {
           importedItems.add(outcome);
         } else {
           skipped++;
-          duplicateItems.add(outcome);
-          keepForOverwrite = true;
+          duplicateItems.add(
+            isDocument
+                ? ImportFileOutcome(
+                    status: outcome.status,
+                    kind: outcome.kind,
+                    title: outcome.title,
+                    id: outcome.id,
+                    shelfGroup: outcome.shelfGroup,
+                    localPath: reference,
+                  )
+                : outcome,
+          );
+          keepForOverwrite = !isDocument;
         }
       } catch (e) {
-        errors.add('${p.basename(filePath)}: $e');
+        errors.add(filePath == null ? '$e' : '${p.basename(filePath)}: $e');
       } finally {
-        if (!keepForOverwrite) await storage.releaseTemp(filePath);
+        if (!keepForOverwrite && filePath != null) {
+          await storage.releaseTemp(filePath);
+        }
       }
     }
 
@@ -747,6 +920,11 @@ class ImportService {
     );
   }
 
+  Future<void> removeWatchedDirectory(WatchedFolder folder) async {
+    await db.deleteWatchedFolder(folder.id);
+    await storage.releaseWatchedDirectory(folder.uriOrPath);
+  }
+
   Future<List<ImportCandidate>> scanWatchedFolders({
     void Function(WatchedFolder, Object)? onFolderError,
   }) async {
@@ -777,23 +955,29 @@ class ImportService {
             ),
           );
         }
-      } else if (Directory(folder.uriOrPath).existsSync()) {
-        for (final ent
-            in Directory(folder.uriOrPath).listSync(recursive: true)) {
-          if (ent is! File) continue;
-          final name = p.basename(ent.path);
-          final kind = classifyExtension(name);
-          if (kind == 'unknown') continue;
-          found.add(
-            ImportCandidate(
-              uriOrPath: ent.path,
-              name: name,
-              ext: p.extension(name).replaceFirst('.', '').toUpperCase(),
-              sizeBytes: ent.lengthSync(),
-              targetKind: kind,
-              isSafUri: false,
-            ),
-          );
+      } else if (await Directory(folder.uriOrPath).exists()) {
+        try {
+          await for (final ent in Directory(
+            folder.uriOrPath,
+          ).list(recursive: true, followLinks: false)) {
+            if (ent is! File) continue;
+            final name = p.basename(ent.path);
+            final kind = classifyExtension(name);
+            if (kind == 'unknown') continue;
+            found.add(
+              ImportCandidate(
+                uriOrPath: ent.path,
+                name: name,
+                ext: p.extension(name).replaceFirst('.', '').toUpperCase(),
+                sizeBytes: await ent.length(),
+                targetKind: kind,
+                isSafUri: false,
+              ),
+            );
+          }
+        } on FileSystemException catch (error) {
+          if (onFolderError == null) rethrow;
+          onFolderError(folder, error);
         }
       }
     }
@@ -831,13 +1015,16 @@ class ImportService {
           errors.add('${c.name}: ERR_STREAM_OPEN');
           continue;
         }
-        final kind = autoClassify ? c.targetKind : 'book';
+        final kind = autoClassify || c.kindManuallySelected
+            ? c.targetKind
+            : 'book';
         final outcome = await importLocalPathDetailed(
           localPath,
           forceKind: kind,
           overwriteExisting: overwriteExisting,
-          targetShelfId:
-              kind == 'comic' ? targetMangaShelfId : targetBookShelfId,
+          targetShelfId: kind == 'comic'
+              ? targetMangaShelfId
+              : targetBookShelfId,
         );
         if (outcome.status == 'book') {
           books++;
@@ -847,8 +1034,19 @@ class ImportService {
           importedItems.add(outcome);
         } else {
           skipped++;
-          duplicateItems.add(outcome);
-          keepForOverwrite = true;
+          duplicateItems.add(
+            c.isSafUri
+                ? ImportFileOutcome(
+                    status: outcome.status,
+                    kind: outcome.kind,
+                    title: outcome.title,
+                    id: outcome.id,
+                    shelfGroup: outcome.shelfGroup,
+                    localPath: c.uriOrPath,
+                  )
+                : outcome,
+          );
+          keepForOverwrite = !c.isSafUri;
         }
       } catch (e) {
         errors.add('${c.name}: $e');

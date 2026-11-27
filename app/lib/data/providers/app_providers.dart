@@ -20,7 +20,9 @@ final platformBridgeProvider = Provider<PlatformBridge>((ref) {
   return MethodChannelPlatformBridge();
 });
 
-final libraryStorageProvider = Provider<LibraryStorage>((ref) => LibraryStorage());
+final libraryStorageProvider = Provider<LibraryStorage>(
+  (ref) => LibraryStorage(),
+);
 
 final workingDirectoryProvider = FutureProvider<PickedDirectory?>(
   (ref) => ref.watch(libraryStorageProvider).workingDirectory(),
@@ -54,7 +56,7 @@ final coreHealthProvider = Provider<CoreHealthInfo>((ref) {
       'cb7',
       '7z',
       'pdf',
-      'folder'
+      'folder',
     ],
     isNativeLoaded: false,
   );
@@ -100,12 +102,12 @@ final watchedFoldersStreamProvider = StreamProvider<List<WatchedFolder>>((ref) {
   return ref.watch(appDatabaseProvider).watchWatchedFolders();
 });
 
-final mangaChaptersStreamProvider =
-    StreamProvider.family<List<MangaChapter>, int>((ref, mangaId) {
-  return ref.watch(appDatabaseProvider).watchChaptersForManga(mangaId);
-});
+final mangaChaptersStreamProvider = StreamProvider.autoDispose
+    .family<List<MangaChapter>, int>((ref, mangaId) {
+      return ref.watch(appDatabaseProvider).watchChaptersForManga(mangaId);
+    });
 
-final annotationsStreamProvider =
-    StreamProvider.family<List<Annotation>, String>((ref, contentHash) {
-  return ref.watch(appDatabaseProvider).watchAnnotationsFor(contentHash);
-});
+final annotationsStreamProvider = StreamProvider.autoDispose
+    .family<List<Annotation>, String>((ref, contentHash) {
+      return ref.watch(appDatabaseProvider).watchAnnotationsFor(contentHash);
+    });

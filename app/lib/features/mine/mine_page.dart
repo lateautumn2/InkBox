@@ -85,7 +85,7 @@ class _MinePageState extends ConsumerState<MinePage> {
         InkOptionItem(value: 'ja', label: l10n.languageJa),
       ],
     );
-    if (picked != null) {
+    if (picked != null && mounted) {
       await ref.read(appearanceProvider.notifier).setAppLocaleCode(picked);
     }
   }
@@ -109,14 +109,15 @@ class _MinePageState extends ConsumerState<MinePage> {
     final totalMinutes =
         historyBooks.fold<int>(0, (sum, b) => sum + b.readingTimeSec) ~/ 60;
     final rateStr = readerSettings.ttsRate.toStringAsFixed(1);
+    final profile = ttsConfig.activeProfile;
+    final profileName = profile.hasDefaultName
+        ? profile.kind.labelOf(l10n)
+        : profile.name;
     final ttsSubtitle = ttsConfig.mode == TtsEngineMode.online
-        ? l10n.ttsMenuSummaryOnline(ttsConfig.activeProfile.name, rateStr)
+        ? l10n.ttsMenuSummaryOnline(profileName, rateStr)
         : l10n.ttsMenuSummaryLocal(rateStr);
 
-    final bottomPad = isWideLayout(context)
-        ? 28.0
-        : (tokens.isFloatingCard ? 104.0 : 28.0);
-    final isDarkNow = Theme.of(context).brightness == Brightness.dark;
+    final bottomPad = MediaQuery.paddingOf(context).bottom + 28;
 
     return SafeArea(
       bottom: false,
@@ -128,17 +129,14 @@ class _MinePageState extends ConsumerState<MinePage> {
               actions: [
                 InkCircleButton(
                   icon: InkIconWidget(
-                    isDarkNow ? InkIcon.sun : InkIcon.moon,
+                    Theme.of(context).brightness == Brightness.dark
+                        ? InkIcon.moon
+                        : InkIcon.sun,
                     size: 17,
                     color: tokens.inkPrimary,
                   ),
                   tooltip: l10n.themePresets,
-                  onPressed: () =>
-                      ref.read(appearanceProvider.notifier).setThemePreference(
-                            isDarkNow
-                                ? InkBoxThemePreference.crispLight
-                                : InkBoxThemePreference.darkTheater,
-                          ),
+                  onPressed: () => showAppearanceSheet(context),
                 ),
               ],
             ),

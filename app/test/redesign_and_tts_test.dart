@@ -1025,6 +1025,7 @@ void main() {
           .where((a) => !a.isDeleted && a.kind == 'bookmark')
           .toList();
       expect(bms1.length, 1);
+      expect(bms1.single.uuid, startsWith('bm_gesture_hash_1_'));
 
       await tester.timedDragFrom(
         const Offset(220, 500),
@@ -1161,6 +1162,32 @@ void main() {
       expect(azureKeyHeader, 'az-secret-key');
       expect(azureFormatHeader, 'audio-24khz-48kbitrate-mono-mp3');
       expect(azureBody, contains('zh-CN-XiaoxiaoNeural'));
+      final migrated = OnlineTtsProfile.newTemplate(
+        OnlineTtsProviderKind.azureSpeech,
+        id: 'azure_regional',
+      ).copyWith(
+        azureRegion: 'eastasia',
+        endpointUrl: 'https://eastus.tts.speech.microsoft.com/cognitiveservices/v1',
+      );
+      expect(OnlineTtsClient.azureEndpoint(migrated).host,
+          'eastasia.tts.speech.microsoft.com');
+      final azAac = await client.synthesizeToFile(
+        profile: azureProfile.copyWith(format: 'aac', voice: "zh-CN-O'Brien"),
+        text: 'a & b',
+        rate: 1.0,
+        pitch: 1.0,
+      );
+      expect(azAac.path, endsWith('.mp3'));
+      expect(azureBody, contains('zh-CN-O&apos;Brien'));
+      expect(azureBody, contains('a &amp; b'));
+      final azOpus = await client.synthesizeToFile(
+        profile: azureProfile.copyWith(format: 'opus'),
+        text: 'Opus',
+        rate: 1.0,
+        pitch: 1.0,
+      );
+      expect(azOpus.path, endsWith('.ogg'));
+      expect(azureFormatHeader, 'ogg-24khz-16bit-mono-opus');
 
       // ms-ra-forwarder SSML POST + enableCache: false leaves persistent cache at 0 bytes
       await cache.clear();
@@ -1183,6 +1210,16 @@ void main() {
       expect(raMethod, 'POST');
       expect(raFormatHeader, 'audio-24khz-48kbitrate-mono-mp3');
       expect(raBody, contains('zh-CN-YunxiNeural'));
+      final queryAudio = await client.synthesizeToFile(
+        profile: raProfile.copyWith(edgeGatewayUseSsml: false),
+        text: 'GET request on the same endpoint',
+        rate: 1.0,
+        pitch: 1.0,
+        enableCache: false,
+      );
+      expect(raMethod, 'GET');
+      expect(raBody, isEmpty);
+      await cache.deleteEphemeralFile(queryAudio.path);
       expect(ephemeral.existsSync(), isTrue);
       expect(tmpCache.listSync(), isEmpty);
       expect(await cache.totalSizeBytes(), greaterThan(0));
@@ -1245,12 +1282,18 @@ void main() {
 
       // P0-1: Online TTS synthesizes at 1.0x and applies ttsRate once in MediaPlayer playback
       final sentSpeeds = <double>[];
+      final cancelledRequest = Completer<void>();
+      final releaseCancelledRequest = Completer<void>();
       final ttsServer = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
       addTearDown(() => ttsServer.close(force: true));
       ttsServer.listen((req) async {
         final raw = await utf8.decodeStream(req);
         final decoded = jsonDecode(raw) as Map<String, dynamic>;
         sentSpeeds.add((decoded['speed'] as num).toDouble());
+        if (decoded['input'] == 'cancel before synthesis finishes') {
+          cancelledRequest.complete();
+          await releaseCancelledRequest.future;
+        }
         req.response.statusCode = HttpStatus.ok;
         req.response.headers.contentType = ContentType('audio', 'mpeg');
         req.response.add([0x49, 0x44, 0x33, sentSpeeds.length]);
@@ -1292,6 +1335,30 @@ void main() {
       expect(platform.lastAudioSpeed, 1.5);
       await ctrl.stop();
       await Future<void>.delayed(const Duration(milliseconds: 50));
+      await cache.clear();
+      final startedAfterStop = ctrl.startChunks(
+        const [
+          TtsSentenceChunk(
+            index: 0,
+            startOffset: 0,
+            endOffset: 32,
+            text: 'cancel before synthesis finishes',
+          ),
+        ],
+        readerSettings: const BookReaderSettings(),
+        ttsConfig: TtsConfigState(
+          mode: TtsEngineMode.online,
+          activeProfileId: oaiProfile.id,
+          profiles: [oaiProfile],
+          cacheEnabled: false,
+          prefetchCount: 0,
+        ),
+      );
+      await cancelledRequest.future;
+      await ctrl.stop();
+      releaseCancelledRequest.complete();
+      expect(await startedAfterStop, isFalse);
+      expect(await cache.totalSizeBytes(), 0);
 
       // P0-5: WebDAV restoreBackupSnapshot preserves authoritative SyncState without dirtying it
       final db = AppDatabase.inMemory();

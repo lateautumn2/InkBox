@@ -35,7 +35,11 @@ pub fn evaluate_progress_merge(
     let remote_dirty = remote.updated_at_epoch_ms > last_synced_epoch_ms;
 
     if local.locator == remote.locator {
-        return MergeOutcome::KeepLocal;
+        return if remote.updated_at_epoch_ms > local.updated_at_epoch_ms {
+            MergeOutcome::AdoptRemote
+        } else {
+            MergeOutcome::KeepLocal
+        };
     }
 
     match (local_dirty, remote_dirty) {
@@ -126,20 +130,43 @@ pub fn pack_backup_snapshot_zip(
 
 /// Unpacks a backup snapshot `.zip` back into a map of `{ relative_path: json_string }`.
 pub fn unpack_backup_snapshot_zip(zip_path: &Path) -> std::io::Result<HashMap<String, String>> {
+    const MAX_ENTRIES: usize = 64;
+    const MAX_ENTRY_BYTES: u64 = 16 * 1024 * 1024;
+    const MAX_TOTAL_BYTES: u64 = 32 * 1024 * 1024;
+    let exceeded = || {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "WebDAV backup exceeds its unpacking limits",
+        )
+    };
     let file = File::open(zip_path)?;
     let mut archive =
         ZipArchive::new(file).map_err(|e| std::io::Error::other(e.to_string()))?;
+    if archive.len() > MAX_ENTRIES {
+        return Err(exceeded());
+    }
     let mut out = HashMap::new();
+    let mut remaining = MAX_TOTAL_BYTES;
     for i in 0..archive.len() {
-        let mut entry = archive
+        let entry = archive
             .by_index(i)
             .map_err(|e| std::io::Error::other(e.to_string()))?;
         if entry.is_dir() {
             continue;
         }
+        let max_bytes = MAX_ENTRY_BYTES.min(remaining);
+        if entry.size() > max_bytes || out.contains_key(entry.name()) {
+            return Err(exceeded());
+        }
+        let name = entry.name().to_string();
+        let expected_size = entry.size();
         let mut content = String::new();
-        entry.read_to_string(&mut content)?;
-        out.insert(entry.name().to_string(), content);
+        let size = entry.take(max_bytes + 1).read_to_string(&mut content)? as u64;
+        if size > max_bytes || size != expected_size {
+            return Err(exceeded());
+        }
+        remaining -= size;
+        out.insert(name, content);
     }
     Ok(out)
 }

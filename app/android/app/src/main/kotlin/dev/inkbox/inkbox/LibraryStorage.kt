@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
+import android.provider.DocumentsContract.Document
 import android.webkit.MimeTypeMap
 import androidx.documentfile.provider.DocumentFile
 import java.io.File
@@ -20,6 +21,11 @@ internal class LibraryStorage(private val context: Context) {
     init {
         if (cleanedPreviousSession.compareAndSet(false, true)) {
             cacheRoot.listFiles()?.filter { it != scratch }?.forEach { it.deleteRecursively() }
+            val cutoff = System.currentTimeMillis() - 24L * 60 * 60 * 1000
+            context.cacheDir.listFiles()?.filter {
+                (it.name.startsWith("inkbox-backup-") || it.name.startsWith("backup-")) &&
+                    it.lastModified() in 1 until cutoff
+            }?.forEach { it.deleteRecursively() }
         }
     }
 
@@ -50,14 +56,62 @@ internal class LibraryStorage(private val context: Context) {
         return mapOf("uri" to uri.toString(), "name" to (directory.name ?: uri.toString()))
     }
 
-    fun selectWorkingDirectory(uri: Uri, flags: Int): Map<String, String> {
-        val permissions = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
-        check((flags and permissions) == permissions) { "ERR_WORK_DIRECTORY" }
+    fun takeTreePermission(uri: Uri, flags: Int, writable: Boolean): Int {
+        val permissions = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            (if (writable) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+        val before = permissionFlags(uri)
+        if (before and permissions == permissions) return 0
+        val required = permissions or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        check(flags and required == required) { if (writable) "ERR_WORK_DIRECTORY" else "ERR_STREAM_OPEN" }
         resolver.takePersistableUriPermission(uri, permissions)
+        return permissions and before.inv()
+    }
+
+    fun releaseTreePermission(uri: Uri, flags: Int) {
+        if (flags != 0) resolver.releasePersistableUriPermission(uri, flags)
+    }
+
+    private fun permissionFlags(uri: Uri): Int {
+        val permission = resolver.persistedUriPermissions.firstOrNull { it.uri == uri } ?: return 0
+        return (if (permission.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+            (if (permission.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+    }
+
+    @Synchronized
+    fun selectWorkingDirectory(uri: Uri): Map<String, String> {
         val directory = writableTree(uri) ?: error("ERR_WORK_DIRECTORY")
         val managed = preferences.getStringSet("managed", emptySet()).orEmpty() + uri.toString()
-        check(preferences.edit().putString("current", uri.toString()).putStringSet("managed", managed).commit())
+        check(preferences.edit().putString("current", uri.toString()).putStringSet("managed", managed).commit()) {
+            "ERR_WORK_DIRECTORY"
+        }
         return mapOf("uri" to uri.toString(), "name" to (directory.name ?: uri.toString()))
+    }
+
+    @Synchronized
+    fun releaseWatchedDirectory(uri: Uri) {
+        val managed = preferences.getStringSet("managed", emptySet()).orEmpty()
+        if (uri.toString() !in managed) releaseTreePermission(uri, permissionFlags(uri))
+    }
+
+    @Synchronized
+    fun pruneWorkingDirectories(references: List<String>, watched: List<String>) {
+        val live = references.mapNotNull { reference ->
+            runCatching {
+                val uri = Uri.parse(reference)
+                DocumentsContract.buildTreeDocumentUri(requireNotNull(uri.authority),
+                    DocumentsContract.getTreeDocumentId(uri)).toString()
+            }.getOrNull()
+        }.toSet() + preferences.getString("current", null)
+        val managed = preferences.getStringSet("managed", emptySet()).orEmpty().toMutableSet()
+        for (reference in managed.toList()) {
+            if (reference in live) continue
+            val uri = Uri.parse(reference)
+            val keep = if (reference in watched) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0
+            if (runCatching { releaseTreePermission(uri, permissionFlags(uri) and keep.inv()) }.isSuccess) {
+                managed.remove(reference)
+            }
+        }
+        preferences.edit().putStringSet("managed", managed).apply()
     }
 
     @Synchronized
@@ -95,7 +149,7 @@ internal class LibraryStorage(private val context: Context) {
         val field = DocumentsContract.Document.COLUMN_DISPLAY_NAME
         val existingNames = resolver.query(children, arrayOf(field), null, null, null)?.use { cursor ->
             buildSet {
-                while (cursor.moveToNext()) add(cursor.getString(0).lowercase(Locale.ROOT))
+                while (cursor.moveToNext()) cursor.getString(0)?.let { add(it.lowercase(Locale.ROOT)) }
             }
         }.orEmpty()
         val name = if (source.name.lowercase(Locale.ROOT) in existingNames) {
@@ -119,7 +173,12 @@ internal class LibraryStorage(private val context: Context) {
 
     fun exists(uri: Uri): Boolean = runCatching {
         val document = DocumentFile.fromSingleUri(context, uri) ?: return false
-        document.canRead() && (document.isDirectory || document.length() > 0)
+        if (!document.canRead()) return false
+        if (document.isDirectory) return true
+        val size = resolver.query(uri, arrayOf(Document.COLUMN_SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else null
+        }
+        size != 0L
     }.getOrDefault(false)
 
     fun open(uri: Uri, extension: String?): Map<String, String> {
@@ -132,7 +191,7 @@ internal class LibraryStorage(private val context: Context) {
             !name.endsWith(".$expected", ignoreCase = true)) "$name.$expected" else name)
         try {
             val paths = mutableMapOf<String, String>()
-            materialize(uri, target, document.isDirectory, paths)
+            materialize(uri, target, document.isDirectory, paths, mutableSetOf(), 0)
             return paths
         } catch (error: Exception) {
             directory.deleteRecursively()
@@ -140,7 +199,12 @@ internal class LibraryStorage(private val context: Context) {
         }
     }
 
-    private fun materialize(uri: Uri, target: File, isDirectory: Boolean, paths: MutableMap<String, String>) {
+    private fun materialize(
+        uri: Uri, target: File, isDirectory: Boolean, paths: MutableMap<String, String>,
+        visitedIds: MutableSet<String>, depth: Int
+    ) {
+        val id = DocumentsContract.getDocumentId(uri)
+        check(depth <= 64 && visitedIds.add(id)) { "ERR_STREAM_OPEN" }
         paths[uri.toString()] = target.absolutePath
         if (!isDirectory) {
             val stream = resolver.openInputStream(uri) ?: error("ERR_STREAM_OPEN")
@@ -148,18 +212,28 @@ internal class LibraryStorage(private val context: Context) {
             return
         }
         check(target.mkdir())
-        val children = DocumentsContract.buildChildDocumentsUriUsingTree(uri, DocumentsContract.getDocumentId(uri))
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(uri, id)
         val fields = arrayOf(
             DocumentsContract.Document.COLUMN_DOCUMENT_ID,
             DocumentsContract.Document.COLUMN_DISPLAY_NAME,
             DocumentsContract.Document.COLUMN_MIME_TYPE
         )
+        val names = mutableSetOf<String>()
         resolver.query(children, fields, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) {
-                val childUri = DocumentsContract.buildDocumentUriUsingTree(uri, cursor.getString(0))
-                val child = File(target, safeName(cursor.getString(1)))
-                check(!child.exists()) { "Duplicate document name" }
-                materialize(childUri, child, cursor.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR, paths)
+                val childId = cursor.getString(0) ?: continue
+                if (childId in visitedIds) continue
+                val childUri = DocumentsContract.buildDocumentUriUsingTree(uri, childId)
+                val name = safeName(cursor.getString(1) ?: "document")
+                var uniqueName = name
+                var index = 2
+                while (!names.add(uniqueName.lowercase(Locale.ROOT))) {
+                    val stem = name.substringBeforeLast('.', name)
+                    val extension = name.removePrefix(stem)
+                    uniqueName = "${stem}_${index++}$extension"
+                }
+                materialize(childUri, File(target, uniqueName), cursor.getString(2) == Document.MIME_TYPE_DIR,
+                    paths, visitedIds, depth + 1)
             }
         } ?: error("ERR_STREAM_OPEN")
     }
@@ -173,7 +247,7 @@ internal class LibraryStorage(private val context: Context) {
     }.getOrDefault(false)
 
     private fun safeName(name: String): String {
-        val cleaned = name.replace('/', '_').replace('\\', '_')
+        val cleaned = name.map { if (it == '/' || it == '\\' || it.isISOControl()) '_' else it }.joinToString("")
         return cleaned.takeUnless { it.isBlank() || it == "." || it == ".." } ?: "document"
     }
 

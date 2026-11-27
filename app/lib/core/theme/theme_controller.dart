@@ -66,9 +66,11 @@ class AppearanceController extends Notifier<AppearanceState> {
   static const _kThemePref = 'inkbox_theme_pref';
   static const _kDynamicColor = 'inkbox_dynamic_color';
   static const _kAppLocale = 'inkbox_app_locale';
+  final _changedPreferences = <String>{};
 
   @override
   AppearanceState build() {
+    _changedPreferences.clear();
     _hydrate();
     return const AppearanceState();
   }
@@ -80,18 +82,29 @@ class AppearanceController extends Notifier<AppearanceState> {
       final themeIdx = prefs.getInt(_kThemePref);
       final dynamicColor = prefs.getBool(_kDynamicColor);
       final localeCode = prefs.getString(_kAppLocale);
-      state = AppearanceState(
-        uiStyle: styleIdx != null && styleIdx < InkBoxUiStyle.values.length
+      state = state.copyWith(
+        uiStyle:
+            !_changedPreferences.contains(_kUiStyle) &&
+                styleIdx != null &&
+                styleIdx >= 0 &&
+                styleIdx < InkBoxUiStyle.values.length
             ? InkBoxUiStyle.values[styleIdx]
-            : InkBoxUiStyle.floatingCard,
-        themePreference: themeIdx != null &&
+            : null,
+        themePreference:
+            !_changedPreferences.contains(_kThemePref) &&
+                themeIdx != null &&
+                themeIdx >= 0 &&
                 themeIdx < InkBoxThemePreference.values.length
             ? InkBoxThemePreference.values[themeIdx]
-            : InkBoxThemePreference.crispLight,
-        useDynamicColor: dynamicColor ?? false,
-        appLocaleCode: const {'system', 'zh', 'en', 'ja'}.contains(localeCode)
-            ? localeCode!
-            : 'system',
+            : null,
+        useDynamicColor: _changedPreferences.contains(_kDynamicColor)
+            ? null
+            : dynamicColor,
+        appLocaleCode:
+            !_changedPreferences.contains(_kAppLocale) &&
+                const {'system', 'zh', 'en', 'ja'}.contains(localeCode)
+            ? localeCode
+            : null,
       );
     } catch (_) {
       // Safe fallback during isolated widget tests.
@@ -99,6 +112,7 @@ class AppearanceController extends Notifier<AppearanceState> {
   }
 
   Future<void> setUiStyle(InkBoxUiStyle style) async {
+    _changedPreferences.add(_kUiStyle);
     state = state.copyWith(uiStyle: style);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kUiStyle, style.index);
@@ -112,32 +126,24 @@ class AppearanceController extends Notifier<AppearanceState> {
   }
 
   Future<void> setThemePreference(InkBoxThemePreference pref) async {
+    _changedPreferences.add(_kThemePref);
     state = state.copyWith(themePreference: pref);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setInt(_kThemePref, pref.index);
   }
 
-  Future<void> cycleThemePreference() async {
-    const order = [
-      InkBoxThemePreference.crispLight,
-      InkBoxThemePreference.darkTheater,
-      InkBoxThemePreference.oledBlack,
-      InkBoxThemePreference.inkWash,
-    ];
-    final cur = order.indexOf(state.themePreference);
-    final next = order[(cur + 1) % order.length];
-    await setThemePreference(next);
-  }
-
   Future<void> setUseDynamicColor(bool value) async {
+    _changedPreferences.add(_kDynamicColor);
     state = state.copyWith(useDynamicColor: value);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setBool(_kDynamicColor, value);
   }
 
   Future<void> setAppLocaleCode(String code) async {
-    final safeCode =
-        const {'system', 'zh', 'en', 'ja'}.contains(code) ? code : 'system';
+    _changedPreferences.add(_kAppLocale);
+    final safeCode = const {'system', 'zh', 'en', 'ja'}.contains(code)
+        ? code
+        : 'system';
     state = state.copyWith(appLocaleCode: safeCode);
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_kAppLocale, safeCode);

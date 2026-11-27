@@ -118,44 +118,79 @@ class _ShelfSwitcherSheet extends ConsumerStatefulWidget {
 class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
   String get _mediaKind => widget.mediaKind;
 
-  Future<void> _promptCreateShelf() async {
-    final isComic = _mediaKind == 'comic';
-    final l10n = context.l10n;
-    final ctrl = TextEditingController();
-    final name = await showInkModal<String>(
+  Future<T?> _editShelfName<T extends Object>({
+    required String title,
+    required String label,
+    required String action,
+    required String conflict,
+    required Future<T?> Function(String name) submit,
+    String initialName = '',
+    String? hint,
+  }) {
+    final controller = TextEditingController(text: initialName);
+    final error = ValueNotifier<String?>(null);
+    var saving = false;
+    Future<void> save(BuildContext context) async {
+      final name = controller.text.trim();
+      if (saving || name.isEmpty) return;
+      saving = true;
+      final route = ModalRoute.of(context);
+      try {
+        final saved = await submit(name);
+        if (!context.mounted || route?.isCurrent != true) return;
+        if (saved == null) {
+          error.value = conflict;
+          return;
+        }
+        Navigator.of(context).pop(saved);
+      } catch (failure) {
+        if (context.mounted && route?.isCurrent == true) {
+          error.value = localizeError(context.l10n, failure);
+        }
+      } finally {
+        saving = false;
+      }
+    }
+
+    return showInkModal<T>(
       context: context,
-      title: isComic ? l10n.createMangaShelfTitle : l10n.createShelfTitle,
-      disposables: [ctrl],
-      builder: (ctx) => InkTextField(
-        controller: ctrl,
-        autofocus: true,
-        label: ctx.l10n.shelfNameLabel,
-        hintText: isComic
-            ? ctx.l10n.shelfExampleManga
-            : ctx.l10n.shelfExampleBook,
-        onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+      title: title,
+      disposables: [controller, error],
+      builder: (ctx) => ValueListenableBuilder(
+        valueListenable: error,
+        builder: (_, validation, _) => InkTextField(
+          controller: controller,
+          autofocus: true,
+          label: label,
+          hintText: hint,
+          helperText: validation,
+          onSubmitted: (_) => save(ctx),
+          onChanged: (_) => error.value = null,
+        ),
       ),
       actionsBuilder: (ctx) => [
         TextButton(
           onPressed: () => Navigator.of(ctx).pop(),
           child: Text(ctx.l10n.cancel),
         ),
-        FilledButton(
-          onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-          child: Text(ctx.l10n.create),
-        ),
+        FilledButton(onPressed: () => save(ctx), child: Text(action)),
       ],
     );
-    if (name == null || name.isEmpty) return;
-    final created =
-        await ref.read(appDatabaseProvider).createShelf(name, _mediaKind);
-    if (!mounted) return;
-    if (created == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.shelfNameExists)),
-      );
-      return;
-    }
+  }
+
+  Future<void> _promptCreateShelf() async {
+    final isComic = _mediaKind == 'comic';
+    final l10n = context.l10n;
+    final db = ref.read(appDatabaseProvider);
+    final created = await _editShelfName<Shelf>(
+      title: isComic ? l10n.createMangaShelfTitle : l10n.createShelfTitle,
+      label: l10n.shelfNameLabel,
+      hint: isComic ? l10n.shelfExampleManga : l10n.shelfExampleBook,
+      action: l10n.create,
+      conflict: l10n.shelfNameExists,
+      submit: (name) => db.createShelf(name, _mediaKind),
+    );
+    if (created == null || !mounted) return;
     if (isComic) {
       ref.read(activeMangaShelfIdProvider.notifier).state = created.id;
     } else {
@@ -167,39 +202,19 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
   Future<void> _promptRenameShelf(Shelf shelf) async {
     final isComic = _mediaKind == 'comic';
     final l10n = context.l10n;
-    final ctrl = TextEditingController(
-      text: localizedShelfName(l10n, shelf, isComic: isComic),
-    );
-    final nextName = await showInkModal<String>(
-      context: context,
+    final db = ref.read(appDatabaseProvider);
+    final displayedName = localizedShelfName(l10n, shelf, isComic: isComic);
+    await _editShelfName<bool>(
       title: isComic ? l10n.renameMangaShelfTitle : l10n.renameShelfTitle,
-      disposables: [ctrl],
-      builder: (ctx) => InkTextField(
-        controller: ctrl,
-        autofocus: true,
-        label: ctx.l10n.newNameLabel,
-        onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
-      ),
-      actionsBuilder: (ctx) => [
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: Text(ctx.l10n.cancel),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(ctx).pop(ctrl.text.trim()),
-          child: Text(ctx.l10n.save),
-        ),
-      ],
+      label: l10n.newNameLabel,
+      initialName: displayedName,
+      action: l10n.save,
+      conflict: l10n.shelfRenameConflict,
+      submit: (name) async {
+        if (name == displayedName || name == shelf.name) return true;
+        return await db.renameShelf(shelf.id, name, _mediaKind) ? true : null;
+      },
     );
-    if (nextName == null || nextName.isEmpty) return;
-    final ok = await ref
-        .read(appDatabaseProvider)
-        .renameShelf(shelf.id, nextName, _mediaKind);
-    if (!ok && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.l10n.shelfRenameConflict)),
-      );
-    }
   }
 
   Future<void> _promptDeleteShelf(Shelf shelf, Shelf defaultShelf) async {
@@ -227,7 +242,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
         ),
       ],
     );
-    if (ok != true) return;
+    if (ok != true || !mounted) return;
     await ref.read(appDatabaseProvider).deleteShelf(shelf.id, _mediaKind);
     if (!mounted) return;
     if (isComic && ref.read(activeMangaShelfIdProvider) == shelf.id) {
@@ -243,6 +258,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
     final l10n = context.l10n;
     final isComic = _mediaKind == 'comic';
     final wide = isWideLayout(context);
+    final systemBottom = MediaQuery.paddingOf(context).bottom;
 
     final shelves = (isComic
             ? ref.watch(mangaShelvesStreamProvider).valueOrNull
@@ -265,7 +281,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
               ));
 
     return SafeArea(
-      maintainBottomViewPadding: true,
+      bottom: false,
       child: Center(
         heightFactor: 1.0,
         child: ConstrainedBox(
@@ -277,12 +293,20 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
               tokens.isFloatingCard ? 14 : 0,
               0,
               tokens.isFloatingCard ? 14 : 0,
-              tokens.isFloatingCard ? 14 : 0,
+              tokens.isFloatingCard ? systemBottom + 14 : 0,
             ),
             child: FloatingCard(
-              frosted: true,
+              frosted: tokens.isFloatingCard,
               radius: 22,
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+              borderRadius: tokens.isFloatingCard
+                  ? null
+                  : const BorderRadius.vertical(top: Radius.circular(22)),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                16 + (tokens.isFloatingCard ? 0 : systemBottom),
+              ),
               child: ConstrainedBox(
                 constraints: BoxConstraints(
                   maxHeight: MediaQuery.sizeOf(context).height * 0.72,

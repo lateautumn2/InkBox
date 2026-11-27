@@ -162,4 +162,142 @@ void main() {
     expect(await destination.findBookByHash('bookhash'), isNull);
     expect(await library.list().isEmpty, isTrue);
   });
+
+  test(
+    'restores fields from newer sync records and keeps the sync baseline',
+    () async {
+      for (final hash in ['existing', 'backed_up']) {
+        await source.upsertBook(
+          BooksCompanion.insert(
+            contentHash: hash,
+            title: hash,
+            format: 'TXT',
+            filePath: '',
+            addedAtMs: 1,
+            lastReadAtMs: 2,
+          ),
+        );
+        await source.upsertSyncState(
+          SyncStatesCompanion.insert(
+            contentHash: hash,
+            mediaKind: 'book',
+            locator: 'ch:2;off:15',
+            progressRatio: const Value(0.25),
+            updatedAtMs: 1000,
+            lastSyncedAtMs: const Value(1250),
+            deviceId: 'tablet',
+            deviceName: 'Tablet',
+          ),
+        );
+      }
+      await destination.upsertSyncState(
+        SyncStatesCompanion.insert(
+          contentHash: 'existing',
+          mediaKind: 'book',
+          locator: 'ch:10;off:150',
+          progressRatio: const Value(0.8),
+          updatedAtMs: 5000,
+          lastSyncedAtMs: const Value(6000),
+          deviceId: 'phone',
+          deviceName: 'Phone',
+        ),
+      );
+
+      final backup = File(p.join(temp.path, 'backup.zip'));
+      await LocalBackupService(source).exportTo(backup);
+      await LocalBackupService(destination).importFrom(
+        backup,
+        libraryDirectory: Directory(p.join(temp.path, 'restored')),
+      );
+
+      final existing = (await destination.findBookByHash('existing'))!;
+      expect(existing.currentChapterIndex, 10);
+      expect(existing.currentCharOffset, 150);
+      expect(existing.progressRatio, 0.8);
+      expect(
+        (await destination.getSyncState('existing'))!.lastSyncedAtMs,
+        6000,
+      );
+      final restored = (await destination.findBookByHash('backed_up'))!;
+      expect(restored.currentChapterIndex, 2);
+      expect(restored.progressRatio, 0.25);
+      expect(
+        (await destination.getSyncState('backed_up'))!.lastSyncedAtMs,
+        1250,
+      );
+    },
+  );
+
+  test('rejects incomplete manifests as format errors', () async {
+    final backup = File(p.join(temp.path, 'bad-metadata.zip'));
+    final encoder = ZipFileEncoder()..create(backup.path);
+    encoder.addArchiveFile(
+      ArchiveFile.string('inkbox-library.json', '{"version":1}'),
+    );
+    encoder.closeSync();
+    await expectLater(
+      LocalBackupService(destination).importFrom(
+        backup,
+        libraryDirectory: Directory(p.join(temp.path, 'restored')),
+      ),
+      throwsFormatException,
+    );
+  });
+
+  test('comic progress identifies chapters across different SQLite IDs', () async {
+    Future<int> addManga(AppDatabase db, String hash) => db.upsertManga(
+      MangasCompanion.insert(
+        contentHash: hash,
+        title: hash,
+        format: 'CBZ',
+        rootPath: '',
+        addedAtMs: 1,
+        lastReadAtMs: 1,
+      ),
+    );
+
+    Future<int> addChapter(AppDatabase db, int mangaId) => db
+        .into(db.mangaChapters)
+        .insert(
+          MangaChaptersCompanion.insert(
+            mangaId: mangaId,
+            title: 'Chapter 3',
+            chapterIndex: 2,
+            sourcePath: '',
+            pageCount: const Value(5),
+            updatedAtMs: 1,
+          ),
+        );
+
+    final sourceManga = await addManga(source, 'comic');
+    final sourceChapter = await addChapter(source, sourceManga);
+    await addChapter(destination, await addManga(destination, 'other'));
+    final targetManga = await addManga(destination, 'comic');
+    final targetChapter = await addChapter(destination, targetManga);
+    expect(targetChapter, isNot(sourceChapter));
+
+    await source.updateMangaChapterProgress(
+      mangaId: sourceManga,
+      chapterId: sourceChapter,
+      lastReadPage: 4,
+      pageCount: 5,
+    );
+    final progress = (await source.getSyncState('comic'))!;
+    expect(progress.locator, 'idx:2;page:4');
+    await destination.applySyncedProgress(
+      contentHash: 'comic',
+      mediaKind: 'comic',
+      locator: progress.locator,
+      progressRatio: progress.progressRatio,
+      updatedAtMs: progress.updatedAtMs,
+      lastSyncedAtMs: progress.updatedAtMs,
+      deviceId: 'tablet',
+      deviceName: 'Tablet',
+    );
+    final chapter = (await destination.chaptersForManga(targetManga)).single;
+    expect(chapter.id, targetChapter);
+    expect(chapter.lastReadPage, 4);
+    expect(chapter.isRead, isTrue);
+    expect((await destination.findMangaById(targetManga))!.unreadCount, 0);
+  });
 }

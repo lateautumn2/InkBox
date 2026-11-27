@@ -413,11 +413,21 @@
   "ttsPrefetchCountLabel": "Prefetch sentences",
   "ttsPrefetchOff": "Off",
   "ttsPrefetchUnit": "{count}",
-  "@ttsPrefetchUnit": {
-    "placeholders": {
-      "count": { "type": "int" }
-    }
-  },
+  "readAloudLabel": "Read aloud",
+  "webdavDeviceNameLabel": "Device name",
+  "readerLocalFileUnavailable": "Local file is unavailable",
+  "readerBodyTitle": "Main text",
+  "readerPrefaceTitle": "Preface",
+  "readerLocalFileMissing": "The local book file {path} could not be found. Import it again.",
+  "readerCoreUnavailable": "The local parser is unavailable and cannot read {format} files.",
+  "tocRulesImported": "Imported {count} table of contents rules",
+  "tocRulesNotFound": "No table of contents rules to import",
+  "tocRuleInvalidRegex": "Invalid regular expression",
+  "tocRuleEmptyRegex": "Enter a regular expression",
+  "tocRuleMissingName": "Enter a rule name",
+  "tocRuleExampleLabel": "Example",
+  "tocRuleSampleText": "Prologue The Snow\nIt snowed all night.\nChapter 1 Awakening\nA quiet valley.\nChapter 2 The Crossing\nThe trail led west.",
+  "tocRuleTestMatches": "Matching chapter titles ({count})",
   "tapZoneSectionLabel": "Tap zones (tap cells to customize)",
   "tapActionPrev": "Prev",
   "tapActionNext": "Next",

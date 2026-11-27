@@ -1,10 +1,13 @@
+import 'dart:async';
 import 'dart:io';
 
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:inkbox/data/db/app_database.dart';
 import 'package:inkbox/data/platform/library_storage.dart';
 import 'package:inkbox/data/platform/platform_bridge.dart';
 import 'package:inkbox/features/importer/import_service.dart';
+import 'package:inkbox/features/manga_reader/manga_page_source.dart';
 import 'package:path/path.dart' as p;
 
 class _WorkingDirectory extends LibraryStorage {
@@ -51,6 +54,8 @@ class _ImportPicker extends MethodChannelPlatformBridge {
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
   test(
     'direct and scanned imports require a working folder and save its URI',
     () async {
@@ -121,4 +126,91 @@ void main() {
       );
     },
   );
+
+  test(
+    'normalizes SAF copy keys and releases a manga opened after disposal',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('inkbox-lease-test-');
+      addTearDown(() => temp.delete(recursive: true));
+      final pdf = await File(p.join(temp.path, 'manga.pdf'))
+          .writeAsString('PDF');
+      const document = 'content://test/document/manga.pdf';
+      final openStarted = Completer<void>();
+      final openResult = Completer<Map<String, String>>();
+      final released = <String>[];
+      const channel = MethodChannel('dev.inkbox/platform');
+      final messenger =
+          TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger;
+      addTearDown(() => messenger.setMockMethodCallHandler(channel, null));
+      messenger.setMockMethodCallHandler(channel, (call) async {
+        switch (call.method) {
+          case 'storeLibraryPath':
+            expect(call.arguments['path'], p.normalize(temp.path));
+            return {temp.path: document};
+          case 'openLibraryDocument':
+            openStarted.complete();
+            return openResult.future;
+          case 'releaseMediaTemp':
+            released.add(call.arguments['path'] as String);
+            return null;
+        }
+        throw UnsupportedError(call.method);
+      });
+      final storage = _AndroidDocumentStorage();
+      expect(
+        (await storage.store('${temp.path}${p.separator}'))[temp.path],
+        document,
+      );
+      final source = MangaPageSource(sourcePath: document, storage: storage);
+      final opening = source.open();
+      await openStarted.future;
+      await source.dispose();
+      openResult.complete({document: pdf.path});
+      await opening;
+      expect(source.pageCount, 0);
+      expect(released, [pdf.path]);
+    },
+  );
+
+  test(
+    'shares one PDF decode across simultaneous manga page consumers',
+    () async {
+      final temp = await Directory.systemTemp.createTemp('inkbox-pdf-test-');
+      addTearDown(() => temp.delete(recursive: true));
+      final pdf = await File(p.join(temp.path, 'manga.pdf'))
+          .writeAsString('PDF');
+      final platform = _PendingPdfRenderer();
+      final source = MangaPageSource(sourcePath: pdf.path, platform: platform);
+      await source.open();
+      addTearDown(source.dispose);
+      final first = source.loadPage(0, computeCrop: true);
+      final second = source.loadPage(0, computeCrop: true);
+      expect(platform.renderCalls, 1);
+      platform.rendered.complete(Uint8List.fromList([1, 2, 3]));
+      expect(await first, same(await second));
+    },
+  );
+}
+
+class _AndroidDocumentStorage extends LibraryStorage {
+  @override
+  bool get requiresWorkingDirectory => true;
+}
+
+class _PendingPdfRenderer extends MethodChannelPlatformBridge {
+  final rendered = Completer<Uint8List?>();
+  int renderCalls = 0;
+
+  @override
+  Future<int> getPdfPageCount(String path) async => 1;
+
+  @override
+  Future<Uint8List?> renderPdfPage(
+    String path,
+    int pageIndex, {
+    double scale = 2.0,
+  }) {
+    renderCalls++;
+    return rendered.future;
+  }
 }

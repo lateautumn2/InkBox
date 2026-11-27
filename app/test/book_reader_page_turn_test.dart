@@ -297,6 +297,10 @@ void main() {
       await tester.pump(const Duration(milliseconds: 260));
       await _waitUntilLoaded(tester);
       expect(find.textContaining('第 1/3 章'), findsOneWidget);
+      await _flushRealAsync(tester);
+      final scrolledBook = await tester.runAsync(() => db.findBookById(bookId));
+      expect(scrolledBook!.progressRatio, closeTo(1 / 3, 0.01));
+      expect(scrolledBook.currentCharOffset, greaterThan(0));
 
       await tester.pumpWidget(const SizedBox.shrink());
       container.dispose();
@@ -967,6 +971,24 @@ void main() {
         await tester.pumpAndSettle();
       }
       expect(find.textContaining('4/'), findsWidgets);
+
+      final utterancesBeforePause = platform.spokenTexts.length;
+      platform.eventCtrl.add(
+        PlatformEvent(
+          type: 'tts_pause',
+          payload: {'utteranceId': platform.lastUtteranceId},
+        ),
+      );
+      await tester.pumpAndSettle();
+      expect(find.byTooltip('继续'), findsOneWidget);
+      await tester.drag(find.byType(PageTurnStage), const Offset(260, 0));
+      await tester.pumpAndSettle();
+      expect(find.textContaining('3/'), findsWidgets);
+      expect(platform.spokenTexts.length, utterancesBeforePause);
+      await tester.tap(find.byTooltip('继续'));
+      await _flushRealAsync(tester);
+      await tester.pumpAndSettle();
+      expect(platform.spokenTexts.length, utterancesBeforePause + 1);
 
       // Stop TTS
       await tester.tap(find.text('停止'));

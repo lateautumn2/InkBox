@@ -40,63 +40,82 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
   String? _detectedEncoding;
   bool _loadingToc = true;
   bool _tocReversed = false;
-  String? _lastTocFingerprint;
+  Object? _lastTocFingerprint;
+  int _tocRequest = 0;
+  Future<bool>? _tocLoad;
 
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => _loadToc());
+  Object _tocFingerprint(Book book) => (
+    book.id,
+    book.filePath,
+    book.tocRuleId,
+    book.forcedEncoding,
+    context.l10n.localeName,
+  );
+
+  Future<bool> _loadToc(Book book, {bool refresh = false}) {
+    final fingerprint = _tocFingerprint(book);
+    if (!refresh && _lastTocFingerprint == fingerprint) return _tocLoad!;
+    _lastTocFingerprint = fingerprint;
+    return _tocLoad = _readToc(book, ++_tocRequest);
   }
 
-  Future<bool> _loadToc({Book? explicitBook}) async {
+  Future<bool> _readToc(Book book, int request) async {
     final db = ref.read(appDatabaseProvider);
-    final book = explicitBook ?? await db.findBookById(widget.bookId);
-    if (!mounted || book == null) {
-      if (mounted) setState(() => _loadingToc = false);
+    final storage = ref.read(libraryStorageProvider);
+    final l10n = context.l10n;
+    final loader = BookContentLoader(
+      rustCore: ref.read(rustCoreProvider),
+      l10n: l10n,
+    );
+    setState(() => _loadingToc = true);
+    try {
+      final tocRules = await db.getTocRules();
+      final forcedRule = book.tocRuleId != null
+          ? tocRules.where((r) => r.id == book.tocRuleId).firstOrNull
+          : null;
+      ReadableMedia? media;
+      if (LibraryStorage.isDocument(book.filePath)) {
+        try {
+          media = await storage.open(book.filePath, extension: book.format);
+        } catch (_) {
+          // The TOC loader handles unavailable files.
+        }
+      }
+      final LoadedTocResult tocResult;
+      try {
+        tocResult = await loader.loadChapterToc(
+          media == null ? book : book.copyWith(filePath: media.path),
+          tocRules: tocRules,
+          forcedRule: forcedRule,
+        );
+      } finally {
+        await media?.close();
+      }
+      if (!mounted || request != _tocRequest) return false;
+      setState(() {
+        _chapters = tocResult.chapters;
+        _matchedRuleName = tocResult.matchedRuleName;
+        _forcedRuleUnmatched =
+            tocResult.matchedRuleName == null && forcedRule != null;
+        _forcedRuleRawName = forcedRule?.name;
+        _detectedEncoding = tocResult.detectedEncoding;
+        _loadingToc = false;
+      });
+      return tocResult.matchedRuleName != null;
+    } catch (error) {
+      if (mounted && request == _tocRequest) {
+        setState(() {
+          _chapters = const [];
+          _matchedRuleName = null;
+          _forcedRuleUnmatched = false;
+          _forcedRuleRawName = null;
+          _detectedEncoding = null;
+          _loadingToc = false;
+        });
+        _toast(localizeError(l10n, error));
+      }
       return false;
     }
-    final fp =
-        '${book.filePath}|${book.tocRuleId ?? -1}|${book.forcedEncoding ?? "auto"}';
-    _lastTocFingerprint = fp;
-    if (mounted) setState(() => _loadingToc = true);
-
-    final tocRules = await db.getTocRules();
-    final forcedRule = book.tocRuleId != null
-        ? tocRules.where((r) => r.id == book.tocRuleId).firstOrNull
-        : null;
-    final loader = BookContentLoader(rustCore: ref.read(rustCoreProvider));
-    ReadableMedia? media;
-    if (LibraryStorage.isDocument(book.filePath)) {
-      try {
-        media = await ref.read(libraryStorageProvider).open(
-          book.filePath,
-          extension: book.format,
-        );
-      } catch (_) {
-        // The TOC loader handles unavailable files.
-      }
-    }
-    final LoadedTocResult tocResult;
-    try {
-      tocResult = await loader.loadChapterToc(
-        media == null ? book : book.copyWith(filePath: media.path),
-        tocRules: tocRules,
-        forcedRule: forcedRule,
-      );
-    } finally {
-      await media?.close();
-    }
-    if (!mounted) return false;
-    setState(() {
-      _chapters = tocResult.chapters;
-      _matchedRuleName = tocResult.matchedRuleName;
-      _forcedRuleUnmatched =
-          tocResult.matchedRuleName == null && forcedRule != null;
-      _forcedRuleRawName = forcedRule?.name;
-      _detectedEncoding = tocResult.detectedEncoding;
-      _loadingToc = false;
-    });
-    return tocResult.matchedRuleName != null;
   }
 
   void _toast(String msg) {
@@ -153,8 +172,10 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
       await db.updateBookMeta(book.id, tocRuleId: picked);
     }
     final fresh = await db.findBookById(book.id);
-    final matched = await _loadToc(explicitBook: fresh);
-    if (fresh != null && _chapters.isNotEmpty) {
+    if (!mounted || fresh == null) return;
+    final matched = await _loadToc(fresh);
+    if (!mounted || _lastTocFingerprint != _tocFingerprint(fresh)) return;
+    if (_chapters.isNotEmpty) {
       final safeIdx = fresh.currentChapterIndex.clamp(0, _chapters.length - 1);
       await db.updateBookMeta(
         fresh.id,
@@ -193,8 +214,10 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
       await db.updateBookMeta(book.id, forcedEncoding: picked);
     }
     final fresh = await db.findBookById(book.id);
-    await _loadToc(explicitBook: fresh);
-    if (fresh != null && _chapters.isNotEmpty) {
+    if (!mounted || fresh == null) return;
+    await _loadToc(fresh);
+    if (!mounted || _lastTocFingerprint != _tocFingerprint(fresh)) return;
+    if (_chapters.isNotEmpty) {
       final safeIdx = fresh.currentChapterIndex.clamp(0, _chapters.length - 1);
       await db.updateBookMeta(
         fresh.id,
@@ -256,9 +279,10 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
     final l10n = context.l10n;
-    final books =
-        ref.watch(bookHistoryStreamProvider).valueOrNull ?? const <Book>[];
-    final book = books.where((b) => b.id == widget.bookId).firstOrNull;
+    final books = ref.watch(bookHistoryStreamProvider);
+    final book = books.valueOrNull
+        ?.where((b) => b.id == widget.bookId)
+        .firstOrNull;
     final shelves =
         ref.watch(bookShelvesStreamProvider).valueOrNull ?? const <Shelf>[];
     final db = ref.watch(appDatabaseProvider);
@@ -267,17 +291,19 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
       return Scaffold(
         backgroundColor: tokens.canvasBg,
         appBar: AppBar(title: Text(l10n.bookDetailsTitle)),
-        body: Center(child: Text(l10n.notFoundBook)),
+        body: Center(
+          child: books.when(
+            loading: () => const CircularProgressIndicator(),
+            error: (error, _) => Text(localizeError(l10n, error)),
+            data: (_) => Text(l10n.notFoundBook),
+          ),
+        ),
       );
     }
 
-    final expectedFp =
-        '${book.filePath}|${book.tocRuleId ?? -1}|${book.forcedEncoding ?? "auto"}';
-    if (_lastTocFingerprint != null &&
-        _lastTocFingerprint != expectedFp &&
-        !_loadingToc) {
+    if (_lastTocFingerprint != _tocFingerprint(book)) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (mounted) _loadToc(explicitBook: book);
+        if (mounted) _loadToc(book);
       });
     }
 
@@ -426,78 +452,72 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                       ),
                     ),
                     const SizedBox(height: 10),
-                    Row(
+                    Wrap(
+                      spacing: 8,
+                      runSpacing: 4,
                       children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              shape: const StadiumBorder(),
-                              side: BorderSide(color: tokens.subtleBorder),
-                            ),
-                            onPressed: () async {
-                              final targetId = await showMoveToShelfDialog(
-                                context: context,
-                                db: db,
-                                mediaKind: 'book',
-                                shelves: shelves,
-                                currentShelfId: effectiveShelfId,
-                                itemTitle: book.title,
-                              );
-                              if (targetId != null) {
-                                await db.updateBookMeta(
-                                  book.id,
-                                  shelfId: targetId,
-                                );
-                                _toast(l10n.movedShelfSuccess);
-                              }
-                            },
-                            child: Text(
-                              l10n.moveShelf,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: tokens.inkPrimary,
-                              ),
-                            ),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            shape: const StadiumBorder(),
+                            side: BorderSide(color: tokens.subtleBorder),
                           ),
-                        ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              shape: const StadiumBorder(),
-                              side: BorderSide(color: tokens.subtleBorder),
-                            ),
-                            onPressed: () async {
+                          onPressed: () async {
+                            final targetId = await showMoveToShelfDialog(
+                              context: context,
+                              db: db,
+                              mediaKind: 'book',
+                              shelves: shelves,
+                              currentShelfId: effectiveShelfId,
+                              itemTitle: book.title,
+                            );
+                            if (targetId != null) {
                               await db.updateBookMeta(
                                 book.id,
-                                isPinned: !book.isPinned,
+                                shelfId: targetId,
                               );
-                            },
-                            child: Text(
-                              book.isPinned
-                                  ? l10n.unpinFromShelf
-                                  : l10n.pinToShelf,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: tokens.inkPrimary,
-                              ),
+                              _toast(l10n.movedShelfSuccess);
+                            }
+                          },
+                          child: Text(
+                            l10n.moveShelf,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: tokens.inkPrimary,
                             ),
                           ),
                         ),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: OutlinedButton(
-                            style: OutlinedButton.styleFrom(
-                              shape: const StadiumBorder(),
-                              side: BorderSide(color: tokens.accentWarm),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            shape: const StadiumBorder(),
+                            side: BorderSide(color: tokens.subtleBorder),
+                          ),
+                          onPressed: () async {
+                            await db.updateBookMeta(
+                              book.id,
+                              isPinned: !book.isPinned,
+                            );
+                          },
+                          child: Text(
+                            book.isPinned
+                                ? l10n.unpinFromShelf
+                                : l10n.pinToShelf,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: tokens.inkPrimary,
                             ),
-                            onPressed: () => _removeBook(book),
-                            child: Text(
-                              l10n.removeBooks,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: tokens.accentWarm,
-                              ),
+                          ),
+                        ),
+                        OutlinedButton(
+                          style: OutlinedButton.styleFrom(
+                            shape: const StadiumBorder(),
+                            side: BorderSide(color: tokens.accentWarm),
+                          ),
+                          onPressed: () => _removeBook(book),
+                          child: Text(
+                            l10n.removeBooks,
+                            style: TextStyle(
+                              fontSize: 12.5,
+                              color: tokens.accentWarm,
                             ),
                           ),
                         ),
@@ -585,10 +605,12 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
                                   label: l10n.manageRuleLibrary,
                                   onTap: () async {
                                     await context.push('/mine/toc-rules');
-                                    if (mounted) {
-                                      final fresh =
-                                          await db.findBookById(book.id);
-                                      await _loadToc(explicitBook: fresh);
+                                    if (!mounted) return;
+                                    final fresh = await db.findBookById(
+                                      book.id,
+                                    );
+                                    if (mounted && fresh != null) {
+                                      await _loadToc(fresh, refresh: true);
                                     }
                                   },
                                 ),
@@ -1070,6 +1092,7 @@ class _FullBookTocSheetState extends State<_FullBookTocSheet> {
     final tokens = InkBoxTokens.of(context);
     final l10n = context.l10n;
     final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
+    final systemBottom = MediaQuery.paddingOf(context).bottom;
     final wide = isWideLayout(context);
     final ordered =
         _reversed ? widget.chapters.reversed.toList() : widget.chapters;
@@ -1082,6 +1105,7 @@ class _FullBookTocSheetState extends State<_FullBookTocSheet> {
             .toList();
 
     return SafeArea(
+      bottom: false,
       child: Center(
         heightFactor: 1.0,
         child: ConstrainedBox(
@@ -1093,117 +1117,133 @@ class _FullBookTocSheetState extends State<_FullBookTocSheet> {
               tokens.isFloatingCard ? 14 : 0,
               0,
               tokens.isFloatingCard ? 14 : 0,
-              (tokens.isFloatingCard ? 14 : 0) + bottomInset,
+              (tokens.isFloatingCard ? systemBottom + 14 : 0) + bottomInset,
             ),
             child: FloatingCard(
               radius: 22,
-              padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+              borderRadius: tokens.isFloatingCard
+                  ? null
+                  : const BorderRadius.vertical(top: Radius.circular(22)),
+              padding: EdgeInsets.fromLTRB(
+                16,
+                12,
+                16,
+                14 + (tokens.isFloatingCard ? 0 : systemBottom),
+              ),
               child: SizedBox(
                 height: MediaQuery.sizeOf(context).height * 0.76,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Center(
-                      child: Container(
-                        width: 38,
-                        height: 4,
-                        decoration: BoxDecoration(
-                          color: tokens.inkMuted.withValues(alpha: 0.3),
-                          borderRadius: BorderRadius.circular(999),
-                        ),
+                child: CustomScrollView(
+                  controller: _scrollCtrl,
+                  slivers: [
+                    SliverToBoxAdapter(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Center(
+                            child: Container(
+                              width: 38,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: tokens.inkMuted.withValues(alpha: 0.3),
+                                borderRadius: BorderRadius.circular(999),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  '${widget.bookTitle} (${widget.chapters.length})',
+                                  maxLines: 1,
+                                  overflow: TextOverflow.ellipsis,
+                                  style: TextStyle(
+                                    fontSize: 15,
+                                    fontWeight: FontWeight.w700,
+                                    color: tokens.inkPrimary,
+                                  ),
+                                ),
+                              ),
+                              InkPillChip(
+                                label: _reversed
+                                    ? l10n.descendingOrder
+                                    : l10n.ascendingOrder,
+                                onTap: () {
+                                  setState(() => _reversed = !_reversed);
+                                  WidgetsBinding.instance.addPostFrameCallback(
+                                    (_) => _jumpToCurrent(),
+                                  );
+                                },
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          InkTextField(
+                            prefixIcon: InkIcon.search,
+                            hintText: l10n.searchChapterHint,
+                            onChanged: (v) => setState(() => _query = v.trim()),
+                          ),
+                          const SizedBox(height: 8),
+                        ],
                       ),
                     ),
-                    const SizedBox(height: 12),
-                    Row(
-                      children: [
-                        Expanded(
+                    if (filtered.isEmpty)
+                      SliverFillRemaining(
+                        hasScrollBody: false,
+                        child: Center(
                           child: Text(
-                            '${widget.bookTitle} (${widget.chapters.length})',
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
+                            l10n.noMatchingChapters,
                             style: TextStyle(
-                              fontSize: 15,
-                              fontWeight: FontWeight.w700,
-                              color: tokens.inkPrimary,
+                              fontSize: 12.5,
+                              color: tokens.inkMuted,
                             ),
                           ),
                         ),
-                        InkPillChip(
-                          label: _reversed
-                              ? l10n.descendingOrder
-                              : l10n.ascendingOrder,
-                          onTap: () {
-                            setState(() => _reversed = !_reversed);
-                            WidgetsBinding.instance
-                                .addPostFrameCallback((_) => _jumpToCurrent());
-                          },
-                        ),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
-                    InkTextField(
-                      prefixIcon: InkIcon.search,
-                      hintText: l10n.searchChapterHint,
-                      onChanged: (v) => setState(() => _query = v.trim()),
-                    ),
-                    const SizedBox(height: 8),
-                    Expanded(
-                      child: filtered.isEmpty
-                          ? Center(
-                              child: Text(
-                                l10n.noMatchingChapters,
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  color: tokens.inkMuted,
-                                ),
+                      )
+                    else
+                      SliverFixedExtentList.builder(
+                        itemExtent: 46,
+                        itemCount: filtered.length,
+                        itemBuilder: (_, idx) {
+                          final ch = filtered[idx];
+                          final active = ch.index == widget.currentChapterIndex;
+                          return InkWell(
+                            borderRadius: BorderRadius.circular(10),
+                            onTap: () => Navigator.of(context).pop(ch.index),
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 10,
                               ),
-                            )
-                          : ListView.builder(
-                              controller: _scrollCtrl,
-                              itemExtent: 46,
-                              itemCount: filtered.length,
-                              itemBuilder: (_, idx) {
-                                final ch = filtered[idx];
-                                final active =
-                                    ch.index == widget.currentChapterIndex;
-                                return InkWell(
-                                  borderRadius: BorderRadius.circular(10),
-                                  onTap: () =>
-                                      Navigator.of(context).pop(ch.index),
-                                  child: Padding(
-                                    padding: const EdgeInsets.symmetric(
-                                        horizontal: 10),
-                                    child: Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            ch.title,
-                                            maxLines: 1,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: TextStyle(
-                                              fontSize: 13,
-                                              fontWeight: active
-                                                  ? FontWeight.w700
-                                                  : FontWeight.w400,
-                                              color: active
-                                                  ? tokens.accentPrimary
-                                                  : tokens.inkPrimary,
-                                            ),
-                                          ),
-                                        ),
-                                        if (active)
-                                          InkIconWidget(
-                                            InkIcon.check,
-                                            size: 15,
-                                            color: tokens.accentPrimary,
-                                          ),
-                                      ],
+                              child: Row(
+                                children: [
+                                  Expanded(
+                                    child: Text(
+                                      ch.title,
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 13,
+                                        fontWeight: active
+                                            ? FontWeight.w700
+                                            : FontWeight.w400,
+                                        color: active
+                                            ? tokens.accentPrimary
+                                            : tokens.inkPrimary,
+                                      ),
                                     ),
                                   ),
-                                );
-                              },
+                                  if (active)
+                                    InkIconWidget(
+                                      InkIcon.check,
+                                      size: 15,
+                                      color: tokens.accentPrimary,
+                                    ),
+                                ],
+                              ),
                             ),
-                    ),
+                          );
+                        },
+                      ),
                   ],
                 ),
               ),

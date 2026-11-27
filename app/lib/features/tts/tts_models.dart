@@ -28,6 +28,14 @@ class EdgeVoicePreset {
   final String id;
   final String label;
   final String locale;
+
+  String displayLabel(String appLocale) {
+    if (appLocale.split(RegExp('[-_]')).first == locale.split('-').first) {
+      return label;
+    }
+    final voice = id.substring(locale.length + 1, id.length - 'Neural'.length);
+    return '$voice ($locale)';
+  }
 }
 
 const List<EdgeVoicePreset> kBuiltinEdgeVoices = [
@@ -96,6 +104,7 @@ const List<String> kOpenAiVoices = [
 ];
 
 const List<String> kOnlineAudioFormats = ['mp3', 'opus', 'aac', 'wav'];
+const List<String> kMicrosoftSpeechAudioFormats = ['mp3', 'opus', 'wav'];
 
 @immutable
 class OnlineTtsProfile {
@@ -128,6 +137,9 @@ class OnlineTtsProfile {
   final String httpMethod; // GET | POST
   final String headersJson;
   final String bodyTemplate;
+
+  bool get hasDefaultName => name.isEmpty ||
+      (kind == OnlineTtsProviderKind.edgeTts && name == '微软大声朗读 (Edge)');
 
   OnlineTtsProfile copyWith({
     String? id,
@@ -186,11 +198,16 @@ class OnlineTtsProfile {
     );
     return OnlineTtsProfile(
       id: json['id'] as String? ?? 'edge_default',
-      name: json['name'] as String? ?? '微软大声朗读 (Edge)',
+      name: json['name'] as String? ?? '',
       kind: kind,
       endpointUrl: json['endpointUrl'] as String? ?? '',
       edgeUseGateway: json['edgeUseGateway'] as bool? ?? false,
-      edgeGatewayUseSsml: json['edgeGatewayUseSsml'] as bool? ?? false,
+      edgeGatewayUseSsml: json['edgeGatewayUseSsml'] as bool? ??
+          (Uri.tryParse(json['endpointUrl'] as String? ?? '')
+                  ?.path
+                  .toLowerCase()
+                  .endsWith('/api/ra') ??
+              false),
       azureRegion: json['azureRegion'] as String? ?? 'eastus',
       model: json['model'] as String? ?? 'tts-1',
       voice: json['voice'] as String? ?? 'zh-CN-XiaoxiaoNeural',
@@ -204,7 +221,7 @@ class OnlineTtsProfile {
   static List<OnlineTtsProfile> defaultPresets() => const [
         OnlineTtsProfile(
           id: 'edge_default',
-          name: '微软大声朗读 (Edge)',
+          name: '',
           kind: OnlineTtsProviderKind.edgeTts,
           endpointUrl: 'http://127.0.0.1:3000/api/ra',
           edgeUseGateway: false,
@@ -232,7 +249,7 @@ class OnlineTtsProfile {
       case OnlineTtsProviderKind.edgeTts:
         return OnlineTtsProfile(
           id: id,
-          name: name ?? '微软大声朗读 (Edge)',
+          name: name ?? '',
           kind: kind,
           endpointUrl: 'http://127.0.0.1:3000/api/ra',
           edgeUseGateway: false,
@@ -243,10 +260,8 @@ class OnlineTtsProfile {
       case OnlineTtsProviderKind.azureSpeech:
         return OnlineTtsProfile(
           id: id,
-          name: name ?? 'Azure Speech',
+          name: name ?? '',
           kind: kind,
-          endpointUrl:
-              'https://eastus.tts.speech.microsoft.com/cognitiveservices/v1',
           azureRegion: 'eastus',
           voice: 'zh-CN-XiaoxiaoNeural',
           format: 'mp3',
@@ -254,7 +269,7 @@ class OnlineTtsProfile {
       case OnlineTtsProviderKind.openAiCompatible:
         return OnlineTtsProfile(
           id: id,
-          name: name ?? 'OpenAI TTS',
+          name: name ?? '',
           kind: kind,
           endpointUrl: 'https://api.openai.com/v1/audio/speech',
           model: 'tts-1',
@@ -264,7 +279,7 @@ class OnlineTtsProfile {
       case OnlineTtsProviderKind.customHttp:
         return OnlineTtsProfile(
           id: id,
-          name: name ?? 'Custom HTTP TTS',
+          name: name ?? '',
           kind: kind,
           endpointUrl:
               'https://example.com/tts?text={{textEncoded}}&voice={{voice}}&rate={{rate}}',

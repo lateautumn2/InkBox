@@ -99,6 +99,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     int currentShelfId,
   ) async {
     final db = ref.read(appDatabaseProvider);
+    final ids = _selectedIds.toList(growable: false);
     final targetShelfId = await showMoveToShelfDialog(
       context: context,
       db: db,
@@ -106,11 +107,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
       shelves: shelves,
       currentShelfId: currentShelfId,
     );
-    if (targetShelfId == null) return;
-    final count = _selectedIds.length;
-    await db.moveBooksToShelf(_selectedIds, targetShelfId);
+    if (targetShelfId == null || !mounted) return;
+    final count = ids.length;
+    await db.moveBooksToShelf(ids, targetShelfId);
     if (!mounted) return;
-    setState(() => _selectedIds.clear());
+    setState(() => _selectedIds.removeAll(ids));
     final updatedShelves = await db.getShelves('book');
     final targetShelf =
         updatedShelves.where((s) => s.id == targetShelfId).firstOrNull;
@@ -124,7 +125,8 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
 
   Future<void> _batchRemoveBooks() async {
     final l10n = context.l10n;
-    final count = _selectedIds.length;
+    final ids = _selectedIds.toList(growable: false);
+    final count = ids.length;
     final choice = await showInkOptionSheet<String>(
       context: context,
       title: l10n.removeBooksTitle(count),
@@ -144,23 +146,21 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     );
     if (choice == null || !mounted) return;
     if (choice == 'archive') {
-      await ref.read(appDatabaseProvider).archiveBooksByIds(_selectedIds);
+      await ref.read(appDatabaseProvider).archiveBooksByIds(ids);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.archivedBooksToast(count))),
         );
       }
     } else if (choice == 'permanent') {
-      await ref
-          .read(importServiceProvider)
-          .permanentlyDeleteBooks(_selectedIds);
+      await ref.read(importServiceProvider).permanentlyDeleteBooks(ids);
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text(context.l10n.deletedBooksToast(count))),
         );
       }
     }
-    setState(() => _selectedIds.clear());
+    if (mounted) setState(() => _selectedIds.removeAll(ids));
   }
 
   @override
@@ -176,7 +176,10 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
     final activeShelf = shelves.where((s) => s.id == activeShelfId).firstOrNull;
     final headerTitle = localizedShelfName(l10n, activeShelf, isComic: false);
     final selecting = _selectedIds.isNotEmpty;
-    final navBottomInset = MediaQuery.paddingOf(context).bottom;
+    final navBottomInset = KeyboardInsetPadding.remainingBottomPaddingOf(
+      context,
+      enabled: _showSearch,
+    );
     final wide = isWideLayout(context);
 
     final shelf = SafeArea(
@@ -302,9 +305,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                         : shelfBooks.reduce(
                             (a, b) => a.lastReadAtMs >= b.lastReadAtMs ? a : b,
                           );
-                    final bottomPad = wide
-                        ? 88.0
-                        : (tokens.isFloatingCard ? navBottomInset + 116.0 : 80.0);
+                    final bottomPad = navBottomInset + 80;
 
                     return Column(
                       children: [
@@ -333,13 +334,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                         Expanded(
                           child: filtered.isEmpty
                               ? Center(
-                                  child: Padding(
+                                  child: SingleChildScrollView(
                                     padding: EdgeInsets.only(
                                       left: 24,
                                       right: 24,
-                                      bottom: (!wide && tokens.isFloatingCard)
-                                          ? 64
-                                          : 16,
+                                      bottom: navBottomInset + 16,
                                     ),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
@@ -528,9 +527,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                 return Positioned(
                   left: 14,
                   right: 14,
-                  bottom: (!wide && tokens.isFloatingCard)
-                      ? navBottomInset + 84
-                      : 14,
+                  bottom: navBottomInset + 14,
                   child: Center(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
@@ -601,7 +598,11 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
                                       }
                                     }
                                     if (mounted) {
-                                      setState(() => _selectedIds.clear());
+                                      setState(
+                                        () => _selectedIds.removeAll(
+                                          selectedBooks.map((book) => book.id),
+                                        ),
+                                      );
                                     }
                                   },
                                 ),
@@ -628,9 +629,7 @@ class _BookshelfPageState extends ConsumerState<BookshelfPage> {
           else
             Positioned(
               right: 18,
-              bottom: (!wide && tokens.isFloatingCard)
-                  ? navBottomInset + 84
-                  : 18,
+              bottom: navBottomInset + 18,
               child: FloatingActionButton.small(
                 heroTag: 'bookshelf_import_fab',
                 backgroundColor: tokens.accentPrimary,
@@ -898,11 +897,11 @@ class _BookGridItem extends StatelessWidget {
                 color: tokens.accentPrimary,
                 shape: BoxShape.circle,
               ),
-              child: const Center(
+              child: Center(
                 child: InkIconWidget(
                   InkIcon.check,
                   size: 13,
-                  color: Colors.white,
+                  color: Theme.of(context).colorScheme.onPrimary,
                 ),
               ),
             ),

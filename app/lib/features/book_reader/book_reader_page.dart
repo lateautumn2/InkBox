@@ -78,6 +78,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   bool _ttsPlaying = false;
   bool _ttsExcerptOnly = false;
   bool _ttsPausedForSettings = false;
+  bool _ttsNeedsPageSync = false;
   int _ttsScrollOffset = 0;
   late final TtsPlaybackController _ttsCtrl;
   BookPaperTheme _lastLightPaper = BookPaperTheme.white;
@@ -88,6 +89,8 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
 
   bool _autoScrolling = false;
   Timer? _autoScrollTimer;
+  Timer? _scrollProgressTimer;
+  int _autoScrollEndTicks = 0;
   final ScrollController _scrollCtrl = ScrollController();
   final ScrollController _tocScrollCtrl = ScrollController();
   final PageTurnController _pageTurnCtrl = PageTurnController();
@@ -109,16 +112,23 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   EdgeInsets _lastSafePadding = EdgeInsets.zero;
   int _lastSettingsHash = 0;
   bool _scrollJumpingToEnd = false;
+  bool _scrollChapterFitsViewport = false;
   bool _lastScrollBookmarked = false;
   late final AppDatabase _db;
   late final PlatformBridge _platform;
+  late BookReaderSettings _progressSettings;
 
   @override
   void initState() {
     super.initState();
     _db = ref.read(appDatabaseProvider);
     _platform = ref.read(platformBridgeProvider);
-    final initPaper = ref.read(bookReaderSettingsProvider).paperTheme;
+    ref.listenManual(
+      bookReaderSettingsProvider,
+      (_, next) => _progressSettings = next,
+      fireImmediately: true,
+    );
+    final initPaper = _progressSettings.paperTheme;
     if (initPaper != BookPaperTheme.dark && initPaper != BookPaperTheme.oled) {
       _lastLightPaper = initPaper;
     }
@@ -152,12 +162,13 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   @override
   void dispose() {
     _autoScrollTimer?.cancel();
+    _scrollProgressTimer?.cancel();
     _brightnessHideTimer?.cancel();
     _scrollCtrl.removeListener(_onScrollChanged);
+    _persistProgress(flushTime: true);
     _scrollCtrl.dispose();
     _tocScrollCtrl.dispose();
     _eventSub?.cancel();
-    _persistProgress(flushTime: true);
     _platform.setVolumeKeyPaging(false);
     _platform.setKeepScreenOn(false);
     if (_brightnessOverridden) {
@@ -179,6 +190,13 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       return;
     }
     _anchorCharOffset = _currentScrollEstimatedOffset();
+    _scrollChapterFitsViewport = _scrollCtrl.position.maxScrollExtent <= 0;
+    if (_ttsCtrl.isPaused) _ttsNeedsPageSync = true;
+    if (_scrollProgressTimer?.isActive != true) {
+      _scrollProgressTimer = Timer(const Duration(milliseconds: 350), () {
+        if (mounted && !_loading) unawaited(_persistProgress());
+      });
+    }
     final hasBm = _bookmarksForPage(
       allAnnotations: _annotations,
       chapterIndex: _chapterIdx,
@@ -222,10 +240,14 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     });
 
     final tocRules = await _db.getTocRules();
+    if (!mounted) return;
     final forcedRule = book.tocRuleId != null
         ? tocRules.where((r) => r.id == book.tocRuleId).firstOrNull
         : null;
-    final loader = BookContentLoader(rustCore: ref.read(rustCoreProvider));
+    final loader = BookContentLoader(
+      rustCore: ref.read(rustCoreProvider),
+      l10n: context.l10n,
+    );
     final tocResult = await loader.loadChapterToc(
       book,
       tocRules: tocRules,
@@ -293,7 +315,12 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         .push<({int chapterIndex, int charOffset})>('/book/${book.id}?fromReader=1');
     if (!mounted) return;
     final fresh = await _db.findBookById(book.id);
-    if (!mounted || fresh == null) return;
+    if (!mounted) return;
+    if (fresh == null || fresh.isArchived) {
+      _book = null;
+      context.pop();
+      return;
+    }
     await _refreshAnnotations();
 
     final resolved = await _readableBook(fresh);
@@ -324,10 +351,14 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     int initialOffset = 0,
   }) async {
     final tocRules = await _db.getTocRules();
+    if (!mounted) return;
     final forcedRule = fresh.tocRuleId != null
         ? tocRules.where((r) => r.id == fresh.tocRuleId).firstOrNull
         : null;
-    final loader = BookContentLoader(rustCore: ref.read(rustCoreProvider));
+    final loader = BookContentLoader(
+      rustCore: ref.read(rustCoreProvider),
+      l10n: context.l10n,
+    );
     final tocResult = await loader.loadChapterToc(
       fresh,
       tocRules: tocRules,
@@ -381,7 +412,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     });
 
     final settings = ref.read(bookReaderSettingsProvider);
-    final loader = BookContentLoader(rustCore: ref.read(rustCoreProvider));
+    final loader = BookContentLoader(
+      rustCore: ref.read(rustCoreProvider),
+      l10n: context.l10n,
+    );
     final loaded = await loader.loadChapterContent(
       _book!,
       _chapters[clamped],
@@ -400,8 +434,12 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       _nextChapterPages = const [];
       _pageIdx = 0;
       _loading = false;
-      _scrollJumpingToEnd = jumpEnd;
+      _scrollJumpingToEnd = !_isNativePdfBitmapMode &&
+          ref.read(bookReaderSettingsProvider).pageTurnMode == PageTurnMode.scroll;
+      _scrollChapterFitsViewport = false;
+      _autoScrollEndTicks = 0;
     });
+    if (_ttsCtrl.isPaused) _ttsNeedsPageSync = true;
 
     _resetScrollPositionAfterChapterLoad(
       jumpEnd: jumpEnd,
@@ -415,9 +453,16 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     required bool jumpEnd,
     int initialOffset = 0,
   }) {
+    final generation = _preloadGeneration;
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted || !_scrollCtrl.hasClients) return;
+      if (!mounted || generation != _preloadGeneration) return;
+      if (!_scrollCtrl.hasClients ||
+          _progressSettings.pageTurnMode != PageTurnMode.scroll) {
+        _scrollJumpingToEnd = false;
+        return;
+      }
       final maxExt = _scrollCtrl.position.maxScrollExtent;
+      _scrollChapterFitsViewport = maxExt <= 0;
       double target = 0.0;
       if (jumpEnd) {
         target = maxExt;
@@ -433,6 +478,8 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       }
       _scrollCtrl.jumpTo(target.clamp(0.0, maxExt));
       _scrollJumpingToEnd = false;
+      _anchorCharOffset = _currentScrollEstimatedOffset();
+      unawaited(_persistProgress());
     });
   }
 
@@ -440,7 +487,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     final book = _book;
     if (book == null || _chapters.isEmpty) return;
     final settings = ref.read(bookReaderSettingsProvider);
-    final loader = BookContentLoader(rustCore: ref.read(rustCoreProvider));
+    final loader = BookContentLoader(
+      rustCore: ref.read(rustCoreProvider),
+      l10n: context.l10n,
+    );
 
     LoadedBookChapter? loadedNext;
     LoadedBookChapter? loadedPrev;
@@ -598,8 +648,27 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   Future<void> _persistProgress({bool flushTime = false}) async {
     final book = _book;
     if (book == null || _chapters.isEmpty) return;
-    final chProgress =
-        _pages.isNotEmpty ? (_pageIdx + 1) / _pages.length : 0.0;
+    final settings = _progressSettings;
+    final double chProgress;
+    if (_isNativePdfBitmapMode) {
+      chProgress = 1.0;
+    } else if (settings.pageTurnMode == PageTurnMode.scroll) {
+      final formatted = BookPaginator.formatParagraphs(
+        _loadedChapter?.text ?? '',
+        indent: settings.indentFirstLine,
+      );
+      if (_scrollChapterFitsViewport) {
+        chProgress = 1.0;
+      } else {
+        chProgress = formatted.isEmpty
+            ? 0.0
+            : (_anchorCharOffset / formatted.length).clamp(0.0, 1.0);
+      }
+    } else {
+      chProgress = _pages.isEmpty
+          ? 0.0
+          : (_pageIdx + _pageStep).clamp(0, _pages.length) / _pages.length;
+    }
     final totalRatio =
         ((_chapterIdx + chProgress) / _chapters.length).clamp(0.0, 1.0);
     final deltaSec = flushTime
@@ -620,11 +689,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   bool get _isNativePdfBitmapMode {
-    final settings = ref.read(bookReaderSettingsProvider);
     return _book != null &&
         _book!.format.toUpperCase() == 'PDF' &&
         File(_book!.filePath).existsSync() &&
-        !settings.pdfReflowMode;
+        !_progressSettings.pdfReflowMode;
   }
 
   bool get _canTurnNext {
@@ -757,9 +825,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         _inspectedAnnotation = null;
       });
       _persistProgress();
-      if (_ttsPlaying && !_ttsExcerptOnly) {
-        unawaited(_speakCurrentPage());
-      }
+      _syncTtsAfterPageTurn();
       return;
     }
 
@@ -785,14 +851,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         });
         _persistProgress();
         unawaited(_preloadAdjacentChapters(gen));
-        if (_ttsPlaying && !_ttsExcerptOnly) {
-          unawaited(_speakCurrentPage());
-        }
+        _syncTtsAfterPageTurn();
       } else {
         _loadChapter(_chapterIdx + 1).then((_) {
-          if (mounted && _ttsPlaying && !_ttsExcerptOnly) {
-            unawaited(_speakCurrentPage());
-          }
+          if (mounted) _syncTtsAfterPageTurn();
         });
       }
       return;
@@ -814,9 +876,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         _inspectedAnnotation = null;
       });
       _persistProgress();
-      if (_ttsPlaying && !_ttsExcerptOnly) {
-        unawaited(_speakCurrentPage());
-      }
+      _syncTtsAfterPageTurn();
       return;
     }
 
@@ -844,14 +904,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
         });
         _persistProgress();
         unawaited(_preloadAdjacentChapters(gen));
-        if (_ttsPlaying && !_ttsExcerptOnly) {
-          unawaited(_speakCurrentPage());
-        }
+        _syncTtsAfterPageTurn();
       } else {
         _loadChapter(_chapterIdx - 1, jumpEnd: true).then((_) {
-          if (mounted && _ttsPlaying && !_ttsExcerptOnly) {
-            unawaited(_speakCurrentPage());
-          }
+          if (mounted) _syncTtsAfterPageTurn();
         });
       }
       return;
@@ -931,6 +987,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     List<BookPageSlice>? pages,
     int? pageIndex,
     bool isScrollMode = false,
+    bool wholeSpread = false,
   }) {
     final chBookmarks = allAnnotations
         .where((a) =>
@@ -951,7 +1008,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       }).toList();
     }
     if (pages != null && pages.isNotEmpty && pageIndex != null) {
-      final secondIdx = _isDualSpread && pageIndex + 1 < pages.length
+      final secondIdx = wholeSpread && _isDualSpread && pageIndex + 1 < pages.length
           ? pageIndex + 1
           : null;
       return chBookmarks.where((a) {
@@ -977,6 +1034,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       pages: _pages,
       pageIndex: _pageIdx,
       isScrollMode: isScroll,
+      wholeSpread: true,
     );
 
     if (existingOnPage.isNotEmpty) {
@@ -1015,7 +1073,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
 
     await _db.upsertAnnotation(
       AnnotationsCompanion.insert(
-        uuid: 'bm_${book.id}_${_chapterIdx}_$targetOffset',
+        uuid: 'bm_${book.contentHash}_${_chapterIdx}_$targetOffset',
         contentHash: book.contentHash,
         mediaKind: 'book',
         kind: 'bookmark',
@@ -1322,7 +1380,9 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   void _handleTtsPageCompleted() {
-    if (!mounted || !_ttsPlaying || _ttsPausedForSettings) return;
+    if (!mounted || !_ttsPlaying || _ttsCtrl.isPaused || _ttsPausedForSettings) {
+      return;
+    }
     if (_ttsExcerptOnly) {
       unawaited(_stopTtsPlayback());
       return;
@@ -1363,7 +1423,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   Future<void> _openTtsSettingsFromReader() async {
-    final wasPlaying = _ttsPlaying;
+    final wasPlaying = _ttsPlaying && !_ttsCtrl.isPaused;
     if (wasPlaying) {
       _ttsPausedForSettings = true;
       await _ttsCtrl.pause();
@@ -1380,6 +1440,29 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       } else {
         await _stopTtsPlayback();
       }
+    }
+  }
+
+  void _syncTtsAfterPageTurn() {
+    if (!_ttsPlaying || _ttsExcerptOnly) return;
+    if (_ttsCtrl.isPaused) {
+      _ttsNeedsPageSync = true;
+    } else {
+      unawaited(_speakCurrentPage());
+    }
+  }
+
+  Future<void> _toggleTtsPause() async {
+    if (!_ttsCtrl.isPaused) {
+      await _ttsCtrl.pause();
+    } else if (_ttsNeedsPageSync && !_ttsExcerptOnly) {
+      final settings = ref.read(bookReaderSettingsProvider);
+      if (settings.pageTurnMode == PageTurnMode.scroll) {
+        _ttsScrollOffset = _currentScrollEstimatedOffset();
+      }
+      await _speakCurrentPage();
+    } else {
+      await _ttsCtrl.resume();
     }
   }
 
@@ -1463,11 +1546,11 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
           );
         }
       }
-      await _speakCurrentPage();
+      if (!_ttsCtrl.isPaused) await _speakCurrentPage();
     } else if (curSettings.ttsAutoTurnPage && _chapterIdx + 1 < _chapters.length) {
       _ttsScrollOffset = 0;
       await _loadChapter(_chapterIdx + 1);
-      if (mounted && _ttsPlaying) {
+      if (mounted && _ttsPlaying && !_ttsCtrl.isPaused) {
         await _speakCurrentPage();
       }
     } else {
@@ -1524,6 +1607,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     final ttsCfg = ref.read(ttsConfigProvider);
     final chunks = _buildCurrentPageChunks(settings);
     if (chunks.isEmpty) return false;
+    _ttsNeedsPageSync = false;
     return _ttsCtrl.startChunks(
       chunks,
       readerSettings: settings,
@@ -1536,31 +1620,65 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
       _autoScrollTimer?.cancel();
       setState(() => _autoScrolling = false);
     } else {
-      ref.read(bookReaderSettingsProvider.notifier).update(
-            (s) => s.copyWith(pageTurnMode: PageTurnMode.scroll),
-          );
+      _setPageTurnMode(PageTurnMode.scroll);
       setState(() {
         _autoScrolling = true;
+        _autoScrollEndTicks = 0;
         _menuVisible = false;
         _sheetTab = null;
       });
       _autoScrollTimer = Timer.periodic(const Duration(milliseconds: 50), (_) {
-        if (!_scrollCtrl.hasClients || _loading || _scrollJumpingToEnd) return;
+        final lifecycle = WidgetsBinding.instance.lifecycleState;
+        if (!_scrollCtrl.hasClients ||
+            _loading ||
+            _scrollJumpingToEnd ||
+            _menuVisible ||
+            _activeSelection != null ||
+            _inspectedAnnotation != null ||
+            ModalRoute.of(context)?.isCurrent == false ||
+            (lifecycle != null && lifecycle != AppLifecycleState.resumed)) {
+          return;
+        }
         final speed = ref.read(bookReaderSettingsProvider).autoScrollSpeed;
-        final next = _scrollCtrl.offset + speed * 0.05;
-        if (next >= _scrollCtrl.position.maxScrollExtent) {
+        final position = _scrollCtrl.position;
+        final end = position.maxScrollExtent;
+        if (position.pixels < end) {
+          _autoScrollEndTicks = 0;
+          _scrollCtrl.jumpTo((position.pixels + speed * 0.05).clamp(0.0, end));
+        } else {
+          final holdDistance = end <= 0 ? position.viewportDimension : 0.0;
+          if (++_autoScrollEndTicks * speed * 0.05 < holdDistance) return;
           if (_chapterIdx + 1 < _chapters.length) {
-            _loadChapter(_chapterIdx + 1);
+            unawaited(_loadChapter(_chapterIdx + 1));
           } else {
             _autoScrollTimer?.cancel();
             setState(() => _autoScrolling = false);
             _toast(context.l10n.autoScrollReachedEnd);
           }
-        } else {
-          _scrollCtrl.jumpTo(next);
         }
       });
     }
+  }
+
+  void _setPageTurnMode(PageTurnMode mode) {
+    final previous = ref.read(bookReaderSettingsProvider).pageTurnMode;
+    if (mode == previous) return;
+    if (mode == PageTurnMode.scroll) {
+      _scrollJumpingToEnd = true;
+      _resetScrollPositionAfterChapterLoad(
+        jumpEnd: false,
+        initialOffset: _anchorCharOffset,
+      );
+    } else if (previous == PageTurnMode.scroll) {
+      _pages = const [];
+      if (_autoScrolling) {
+        _autoScrollTimer?.cancel();
+        setState(() => _autoScrolling = false);
+      }
+    }
+    unawaited(ref.read(bookReaderSettingsProvider.notifier).update(
+          (settings) => settings.copyWith(pageTurnMode: mode),
+        ));
   }
 
   Future<void> _exportNotesMarkdown() async {
@@ -1998,6 +2116,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                 pages: _pages,
                 pageIndex: _pageIdx,
                 isScrollMode: isScrollMode,
+                wholeSpread: true,
               ).isNotEmpty;
 
           final scrollChapterHighlights = annotations
@@ -2070,7 +2189,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                                       ),
                                     ),
                                   ),
-                                  if (currentPageBookmarked)
+                  if (currentPageBookmarked)
                                     Padding(
                                       padding: const EdgeInsets.only(right: 6),
                                       child: InkIconWidget(
@@ -2297,18 +2416,6 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   },
                 ),
 
-              // Reader brightness dimming veil (edge-swipe adjustable)
-              if (_brightnessOverridden && _readerBrightness < 0.99)
-                Positioned.fill(
-                  child: IgnorePointer(
-                    child: ColoredBox(
-                      color: Colors.black.withValues(
-                        alpha: ((1.0 - _readerBrightness) * 0.42).clamp(0.0, 0.55),
-                      ),
-                    ),
-                  ),
-                ),
-
               // Left-edge vertical brightness gesture strip (Scroll & PDF bitmap modes)
               if (settings.edgeBrightnessGesture &&
                   (isScrollMode || (isRealPdf && !settings.pdfReflowMode)) &&
@@ -2317,7 +2424,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                   _activeSelection == null &&
                   _inspectedAnnotation == null)
                 Positioned(
-                  left: 0,
+                  left: MediaQuery.systemGestureInsetsOf(context).left,
                   top: safePadding.top + 36,
                   bottom: safePadding.bottom + 36,
                   width: 56,
@@ -2446,7 +2553,9 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                                     l10n.ttsPlayingStatus(
                                       ttsCfg.mode == TtsEngineMode.online &&
                                               !_ttsCtrl.usingFallbackLocal
-                                          ? ttsCfg.activeProfile.name
+                                          ? (ttsCfg.activeProfile.hasDefaultName
+                                              ? ttsCfg.activeProfile.kind.labelOf(l10n)
+                                              : ttsCfg.activeProfile.name)
                                           : l10n.ttsModeLocal,
                                       settings.ttsRate.toStringAsFixed(1),
                                     ),
@@ -2487,11 +2596,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                               tooltip: _ttsCtrl.isPaused
                                   ? l10n.ttsResume
                                   : l10n.ttsPause,
-                              onPressed: () => unawaited(
-                                _ttsCtrl.isPaused
-                                    ? _ttsCtrl.resume()
-                                    : _ttsCtrl.pause(),
-                              ),
+                              onPressed: () => unawaited(_toggleTtsPause()),
                               icon: InkIconWidget(
                                 _ttsCtrl.isPaused
                                     ? InkIcon.play
@@ -3022,7 +3127,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
                     _speakArbitraryText(txt);
                   },
                   child: Text(
-                    l10n.readLabel,
+                    l10n.readAloudLabel,
                     style: TextStyle(fontSize: 13, color: tokens.inkPrimary),
                   ),
                 ),
@@ -3457,13 +3562,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
             return InkPillChip(
               label: m.labelOf(l10n),
               selected: active,
-              onTap: () {
-                if (m != PageTurnMode.scroll && _autoScrolling) {
-                  _autoScrollTimer?.cancel();
-                  setState(() => _autoScrolling = false);
-                }
-                ctrl.update((s) => s.copyWith(pageTurnMode: m));
-              },
+              onTap: () => _setPageTurnMode(m),
             );
           }).toList(),
         ),
@@ -3772,7 +3871,7 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 }
 
-class _NativePdfPageCanvas extends StatelessWidget {
+class _NativePdfPageCanvas extends StatefulWidget {
   const _NativePdfPageCanvas({
     required this.pdfPath,
     required this.pageIndex,
@@ -3784,10 +3883,41 @@ class _NativePdfPageCanvas extends StatelessWidget {
   final PlatformBridge platform;
 
   @override
+  State<_NativePdfPageCanvas> createState() => _NativePdfPageCanvasState();
+}
+
+class _NativePdfPageCanvasState extends State<_NativePdfPageCanvas> {
+  late Future<Uint8List?> _renderedPage;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPage();
+  }
+
+  @override
+  void didUpdateWidget(covariant _NativePdfPageCanvas oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.pdfPath != widget.pdfPath ||
+        oldWidget.pageIndex != widget.pageIndex ||
+        oldWidget.platform != widget.platform) {
+      _loadPage();
+    }
+  }
+
+  void _loadPage() {
+    _renderedPage = widget.platform.renderPdfPage(
+      widget.pdfPath,
+      widget.pageIndex,
+      scale: 2.0,
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
     final l10n = context.l10n;
     return FutureBuilder<Uint8List?>(
-      future: platform.renderPdfPage(pdfPath, pageIndex, scale: 2.0),
+      future: _renderedPage,
       builder: (context, snap) {
         if (snap.connectionState != ConnectionState.done) {
           return const Center(child: CircularProgressIndicator());
@@ -3805,6 +3935,7 @@ class _NativePdfPageCanvas extends StatelessWidget {
           );
         }
         return InteractiveViewer(
+          key: ValueKey((widget.pdfPath, widget.pageIndex)),
           minScale: 1.0,
           maxScale: 4.5,
           child: Center(

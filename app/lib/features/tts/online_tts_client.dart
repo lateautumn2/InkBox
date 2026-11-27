@@ -72,7 +72,11 @@ class OnlineTtsClient {
       throw const OnlineTtsException('ERR_TTS_UNAVAILABLE', 'Empty text');
     }
 
-    final ext = _resolveFileExt(profile.format);
+    final format = _effectiveFormat(profile);
+    final microsoftSpeech = profile.kind == OnlineTtsProviderKind.azureSpeech ||
+        (profile.kind == OnlineTtsProviderKind.edgeTts &&
+            profile.edgeUseGateway && profile.edgeGatewayUseSsml);
+    final ext = microsoftSpeech && format == 'opus' ? 'ogg' : format;
     final configFingerprint =
         '${profile.kind.name}|${profile.edgeUseGateway}|${profile.edgeGatewayUseSsml}|${profile.azureRegion}|${profile.endpointUrl}|${profile.model}|${profile.httpMethod}|${profile.headersJson}|${profile.bodyTemplate}';
     final key = _cache.keyFor(
@@ -241,8 +245,7 @@ class OnlineTtsClient {
       );
     }
     final parsed = Uri.parse(endpoint);
-    if (profile.edgeGatewayUseSsml ||
-        parsed.path.toLowerCase().endsWith('/api/ra')) {
+    if (profile.edgeGatewayUseSsml) {
       final ssml = _buildSsml(
         voice: profile.voice,
         text: text,
@@ -251,7 +254,7 @@ class OnlineTtsClient {
       );
       final headers = <String, String>{
         'Content-Type': 'text/plain; charset=utf-8',
-        'Format': _azureOutputFormat(profile.format),
+        'Format': _azureOutputFormat(_effectiveFormat(profile)),
         if (apiKey.trim().isNotEmpty) 'Authorization': 'Bearer ${apiKey.trim()}',
       };
       return _sendHttpRequest(
@@ -283,16 +286,10 @@ class OnlineTtsClient {
     required double pitch,
     required String apiKey,
   }) async {
-    var endpoint = profile.endpointUrl.trim();
-    if (endpoint.isEmpty) {
-      final region =
-          profile.azureRegion.trim().isEmpty ? 'eastus' : profile.azureRegion.trim();
-      endpoint = 'https://$region.tts.speech.microsoft.com/cognitiveservices/v1';
-    }
-    final uri = Uri.parse(endpoint);
+    final uri = azureEndpoint(profile);
     final headers = <String, String>{
       'Content-Type': 'application/ssml+xml',
-      'X-Microsoft-OutputFormat': _azureOutputFormat(profile.format),
+      'X-Microsoft-OutputFormat': _azureOutputFormat(_effectiveFormat(profile)),
       'User-Agent': 'InkBox',
       if (apiKey.trim().isNotEmpty) 'Ocp-Apim-Subscription-Key': apiKey.trim(),
     };
@@ -317,22 +314,61 @@ class OnlineTtsClient {
     required double pitch,
   }) {
     final safeVoice = voice.trim().isEmpty ? 'zh-CN-XiaoxiaoNeural' : voice.trim();
-    final locale = _localeFromVoice(safeVoice);
+    final locale = _xmlEscape(_localeFromVoice(safeVoice));
     final ratePct = _formatSignedPct((rate - 1.0) * 100);
     final pitchHz = _formatSignedHz((pitch - 1.0) * 20);
     final escapedText = _xmlEscape(text);
     return "<speak version='1.0' xmlns='http://www.w3.org/2001/10/synthesis' xml:lang='$locale'>"
-        "<voice name='$safeVoice'>"
+        "<voice name='${_xmlEscape(safeVoice)}'>"
         "<prosody pitch='$pitchHz' rate='$ratePct' volume='+0%'>$escapedText</prosody>"
         '</voice></speak>';
   }
 
   static String _azureOutputFormat(String format) {
     return switch (_resolveFileExt(format)) {
-      'opus' => 'audio-24khz-48kbitrate-mono-opus',
+      'opus' => 'ogg-24khz-16bit-mono-opus',
       'wav' => 'riff-24khz-16bit-mono-pcm',
       _ => 'audio-24khz-48kbitrate-mono-mp3',
     };
+  }
+
+  static bool isAzureRegionalEndpoint(String endpoint) {
+    final uri = Uri.tryParse(endpoint.trim());
+    return uri != null &&
+        uri.scheme == 'https' &&
+        !uri.hasPort &&
+        uri.userInfo.isEmpty &&
+        !uri.hasQuery &&
+        !uri.hasFragment &&
+        RegExp(r'^[a-z0-9]+\.tts\.speech\.microsoft\.com$')
+            .hasMatch(uri.host) &&
+        uri.path == '/cognitiveservices/v1';
+  }
+
+  static Uri azureEndpoint(OnlineTtsProfile profile) {
+    final endpoint = profile.endpointUrl.trim();
+    if (endpoint.isNotEmpty && !isAzureRegionalEndpoint(endpoint)) {
+      return Uri.parse(endpoint);
+    }
+    final region = profile.azureRegion.trim().toLowerCase();
+    if (region.isNotEmpty && !RegExp(r'^[a-z0-9]+$').hasMatch(region)) {
+      throw const OnlineTtsException('ERR_UNKNOWN', 'Invalid Azure region');
+    }
+    final host = '${region.isEmpty ? 'eastus' : region}.tts.speech.microsoft.com';
+    return Uri.https(host, '/cognitiveservices/v1');
+  }
+
+  static String _effectiveFormat(OnlineTtsProfile profile) {
+    final format = _resolveFileExt(profile.format);
+    if (profile.kind == OnlineTtsProviderKind.edgeTts && !profile.edgeUseGateway) {
+      return 'mp3';
+    }
+    if (profile.kind == OnlineTtsProviderKind.azureSpeech ||
+        (profile.kind == OnlineTtsProviderKind.edgeTts &&
+            profile.edgeGatewayUseSsml)) {
+      return kMicrosoftSpeechAudioFormats.contains(format) ? format : 'mp3';
+    }
+    return format;
   }
 
   Future<Uint8List> _synthesizeCustomHttp({

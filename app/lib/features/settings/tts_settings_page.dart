@@ -46,6 +46,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   bool _loadingEngines = true;
   bool _previewPlaying = false;
   bool _testingConnection = false;
+  int _previewGeneration = 0;
   OnlineTtsTestResult? _lastTestResult;
   int _cacheBytes = 0;
 
@@ -76,26 +77,49 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
   void initState() {
     super.initState();
     _platform = ref.read(platformBridgeProvider);
+    _syncProfileForm(ref.read(ttsConfigProvider));
+    ref.listenManual(ttsConfigProvider, (previous, next) {
+      if (!mounted) return;
+      final changedPreview = previous?.mode != next.mode ||
+          previous?.activeProfileId != next.activeProfileId;
+      setState(() {
+        _syncProfileForm(next);
+        if (changedPreview) {
+          _previewGeneration++;
+          _testingConnection = false;
+          _lastTestResult = null;
+        }
+      });
+      if (changedPreview && _previewPlaying) {
+        unawaited(_stopActivePreview());
+      }
+    });
     _loadEnginesAndVoices();
     _refreshCacheSize();
     _eventSub = _platform.events.listen((ev) {
       if (!mounted) return;
-      if (ev.type == 'tts_done' || ev.type == 'tts_error') {
+      if (ev.type == 'tts_done' ||
+          ev.type == 'tts_error' ||
+          ev.type == 'tts_pause') {
         final uid = (ev.payload['utteranceId'] as String? ?? '').trim();
-        if (_activePreviewUtteranceId != null &&
-            uid.isNotEmpty &&
-            uid != _activePreviewUtteranceId) {
+        if (_activePreviewUtteranceId == null ||
+            (uid.isNotEmpty && uid != _activePreviewUtteranceId)) {
           return;
         }
         setState(() {
           _activePreviewUtteranceId = null;
           _previewPlaying = false;
         });
-      } else if (ev.type == 'audio_done' || ev.type == 'audio_error') {
+      } else if (ev.type == 'audio_done' ||
+          ev.type == 'audio_error' ||
+          ev.type == 'audio_pause') {
         final pid = (ev.payload['playbackId'] as String? ?? '').trim();
-        if (_activePreviewPlaybackId != null &&
-            pid.isNotEmpty &&
-            pid != _activePreviewPlaybackId) {
+        if (_activePreviewPlaybackId == null ||
+            (pid.isNotEmpty && pid != _activePreviewPlaybackId)) {
+          return;
+        }
+        if (ev.type == 'audio_pause') {
+          unawaited(_stopActivePreview());
           return;
         }
         final finishedPath = _activePreviewAudioPath;
@@ -182,15 +206,25 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     if (!force && !shouldHydrateSync && _loadedProfileId == profile.id) return;
     if (cfg.hydrated) _syncedAfterHydrate = true;
     _loadedProfileId = profile.id;
+    _nameCtrl.text = profile.hasDefaultName ? '' : profile.name;
+    _loadProfileFields(profile, apiKey: cfg.secretFor(profile.id));
+  }
+
+  void _loadProfileFields(OnlineTtsProfile profile, {String apiKey = ''}) {
     _selectedKind = profile.kind;
     _edgeUseGateway = profile.edgeUseGateway;
     _edgeGatewayUseSsml = profile.edgeGatewayUseSsml;
-    _selectedFormat = profile.format;
+    _selectedFormat = profile.kind == OnlineTtsProviderKind.azureSpeech &&
+            !kMicrosoftSpeechAudioFormats.contains(profile.format)
+        ? 'mp3'
+        : profile.format;
     _selectedMethod = profile.httpMethod;
-    _nameCtrl.text = profile.name;
-    _endpointCtrl.text = profile.endpointUrl;
+    _endpointCtrl.text = profile.kind == OnlineTtsProviderKind.azureSpeech &&
+            OnlineTtsClient.isAzureRegionalEndpoint(profile.endpointUrl)
+        ? ''
+        : profile.endpointUrl;
     _azureRegionCtrl.text = profile.azureRegion;
-    _apiKeyCtrl.text = cfg.secretFor(profile.id);
+    _apiKeyCtrl.text = apiKey;
     _modelCtrl.text = profile.model;
     _voiceCtrl.text = profile.voice;
     _headersCtrl.text = profile.headersJson;
@@ -201,14 +235,10 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     final region = _azureRegionCtrl.text.trim().isEmpty
         ? 'eastus'
         : _azureRegionCtrl.text.trim();
-    var endpoint = _endpointCtrl.text.trim();
-    if (_selectedKind == OnlineTtsProviderKind.azureSpeech && endpoint.isEmpty) {
-      endpoint = 'https://$region.tts.speech.microsoft.com/cognitiveservices/v1';
-    }
     return base.copyWith(
       name: _nameCtrl.text.trim().isEmpty ? base.name : _nameCtrl.text.trim(),
       kind: _selectedKind,
-      endpointUrl: endpoint,
+      endpointUrl: _endpointCtrl.text.trim(),
       edgeUseGateway: _edgeUseGateway,
       edgeGatewayUseSsml: _edgeGatewayUseSsml,
       azureRegion: region,
@@ -224,17 +254,24 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     );
   }
 
-  Future<void> _saveCurrentProfile() async {
+  Future<bool> _saveCurrentProfile() async {
     final cfg = ref.read(ttsConfigProvider);
     final updated = _draftProfile(cfg.activeProfile);
-    await ref.read(ttsConfigProvider.notifier).upsertProfile(
+    try {
+      await ref.read(ttsConfigProvider.notifier).upsertProfile(
           updated,
           apiKey: _apiKeyCtrl.text,
+          activate: false,
         );
-    _loadedProfileId = updated.id;
+      return true;
+    } catch (error) {
+      if (mounted) _toast(localizeError(context.l10n, error));
+      return false;
+    }
   }
 
   Future<void> _stopActivePreview() async {
+    final generation = ++_previewGeneration;
     _activePreviewUtteranceId = null;
     _activePreviewPlaybackId = null;
     final prevAudio = _activePreviewAudioPath;
@@ -244,7 +281,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     if (prevAudio != null) {
       await _cache.deleteEphemeralFile(prevAudio);
     }
-    if (mounted && _previewPlaying) {
+    if (mounted && generation == _previewGeneration && _previewPlaying) {
       setState(() => _previewPlaying = false);
     }
   }
@@ -257,11 +294,13 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       return;
     }
 
+    final generation = ++_previewGeneration;
+    setState(() => _previewPlaying = true);
     await platform.stopAudio();
+    if (!mounted || generation != _previewGeneration) return;
     final appLocale = ref.read(appearanceProvider).appLocaleCode;
     final sample = ttsPreviewSampleText(settings.ttsLanguage, appLocale);
 
-    setState(() => _previewPlaying = true);
     try {
       final uid = await platform.speakText(
         sample,
@@ -271,7 +310,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
         engine: settings.ttsEngine.isEmpty ? null : settings.ttsEngine,
         voiceName: settings.ttsVoice.isEmpty ? null : settings.ttsVoice,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _previewGeneration) return;
       if (uid == null) {
         setState(() => _previewPlaying = false);
         _toast(l10n.errTtsUnavailable);
@@ -279,7 +318,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
         _activePreviewUtteranceId = uid;
       }
     } catch (e) {
-      if (!mounted) return;
+      if (!mounted || generation != _previewGeneration) return;
       setState(() => _previewPlaying = false);
       _toast(localizeError(l10n, e));
     }
@@ -293,20 +332,27 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       return;
     }
 
+    if (_testingConnection) return;
+    final generation = ++_previewGeneration;
+    setState(() {
+      _testingConnection = true;
+      _lastTestResult = null;
+    });
     await platform.stopTts();
-    await _saveCurrentProfile();
-    if (!mounted) return;
+    if (!mounted || generation != _previewGeneration) return;
+    if (!await _saveCurrentProfile()) {
+      if (mounted && generation == _previewGeneration) {
+        setState(() => _testingConnection = false);
+      }
+      return;
+    }
+    if (!mounted || generation != _previewGeneration) return;
 
     final cfg = ref.read(ttsConfigProvider);
     final profile = cfg.activeProfile;
     final apiKey = cfg.secretFor(profile.id);
     final appLocale = ref.read(appearanceProvider).appLocaleCode;
     final sample = ttsPreviewSampleText(settings.ttsLanguage, appLocale);
-
-    setState(() {
-      _testingConnection = true;
-      _lastTestResult = null;
-    });
 
     final res = await _onlineClient.testConnection(
       profile: profile,
@@ -318,7 +364,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       enableCache: cfg.cacheEnabled,
       maxCacheBytes: cfg.cacheMaxMb * 1024 * 1024,
     );
-    if (!mounted) {
+    if (!mounted || generation != _previewGeneration) {
       if (res.audioPath != null) {
         unawaited(_cache.deleteEphemeralFile(res.audioPath!));
       }
@@ -347,7 +393,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
       if (prevAudio != null && prevAudio != res.audioPath) {
         unawaited(_cache.deleteEphemeralFile(prevAudio));
       }
-      if (!started && mounted) {
+      if (!started && mounted && generation == _previewGeneration) {
         _activePreviewAudioPath = null;
         unawaited(_cache.deleteEphemeralFile(res.audioPath!));
         setState(() {
@@ -499,8 +545,6 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
     final tokens = InkBoxTokens.of(context);
     final isOnline = ttsCfg.mode == TtsEngineMode.online;
 
-    _syncProfileForm(ttsCfg);
-
     return Scaffold(
       body: SafeArea(
         child: ResponsiveConstrainedBody(
@@ -574,11 +618,10 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                             child: _ModeTabButton(
                               label: l10n.ttsModeLocal,
                               selected: !isOnline,
-                              onTap: () async {
-                                if (_previewPlaying) {
-                                  await _stopActivePreview();
+                              onTap: () {
+                                if (isOnline) {
+                                  unawaited(ttsCfgCtrl.setMode(TtsEngineMode.local));
                                 }
-                                await ttsCfgCtrl.setMode(TtsEngineMode.local);
                               },
                             ),
                           ),
@@ -587,11 +630,10 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                             child: _ModeTabButton(
                               label: l10n.ttsModeOnline,
                               selected: isOnline,
-                              onTap: () async {
-                                if (_previewPlaying) {
-                                  await _stopActivePreview();
+                              onTap: () {
+                                if (!isOnline) {
+                                  unawaited(ttsCfgCtrl.setMode(TtsEngineMode.online));
                                 }
-                                await ttsCfgCtrl.setMode(TtsEngineMode.online);
                               },
                             ),
                           ),
@@ -997,15 +1039,11 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                 runSpacing: 8,
                 children: profiles.map((p) {
                   return InkPillChip(
-                    label: p.name,
+                    label: p.hasDefaultName ? p.kind.labelOf(l10n) : p.name,
                     selected: p.id == activeProfile.id,
                     onTap: () {
                       ttsCfgCtrl.setActiveProfile(p.id);
                       _lastTestResult = null;
-                      _syncProfileForm(
-                        ttsCfg.copyWith(activeProfileId: p.id),
-                        force: true,
-                      );
                     },
                   );
                 }).toList(),
@@ -1018,7 +1056,12 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                   return InkPillChip(
                     label: k.labelOf(l10n),
                     selected: _selectedKind == k,
-                    onTap: () => setState(() => _selectedKind = k),
+                    onTap: () {
+                      if (_selectedKind == k) return;
+                      setState(() => _loadProfileFields(
+                            OnlineTtsProfile.newTemplate(k, id: activeProfile.id),
+                          ));
+                    },
                   );
                 }).toList(),
               ),
@@ -1026,6 +1069,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
               InkTextField(
                 controller: _nameCtrl,
                 label: l10n.ttsProfileNameLabel,
+                hintText: _selectedKind.labelOf(l10n),
               ),
               const SizedBox(height: 10),
 
@@ -1110,7 +1154,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                   runSpacing: 6,
                   children: kBuiltinEdgeVoices.map((v) {
                     return InkPillChip(
-                      label: v.label,
+                      label: v.displayLabel(l10n.localeName),
                       selected: _voiceCtrl.text == v.id,
                       onTap: () => setState(() => _voiceCtrl.text = v.id),
                     );
@@ -1156,7 +1200,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                   runSpacing: 6,
                   children: kBuiltinEdgeVoices.map((v) {
                     return InkPillChip(
-                      label: v.label,
+                      label: v.displayLabel(l10n.localeName),
                       selected: _voiceCtrl.text == v.id,
                       onTap: () => setState(() => _voiceCtrl.text = v.id),
                     );
@@ -1171,7 +1215,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                 const SizedBox(height: 10),
                 Wrap(
                   spacing: 6,
-                  children: kOnlineAudioFormats.map((fmt) {
+                  children: kMicrosoftSpeechAudioFormats.map((fmt) {
                     return InkPillChip(
                       label: fmt.toUpperCase(),
                       selected: _selectedFormat == fmt,
@@ -1298,8 +1342,7 @@ class _TtsSettingsPageState extends ConsumerState<TtsSettingsPage> {
                   Expanded(
                     child: OutlinedButton(
                       onPressed: () async {
-                        await _saveCurrentProfile();
-                        if (mounted) {
+                        if (await _saveCurrentProfile() && mounted) {
                           _toast(l10n.save);
                         }
                       },

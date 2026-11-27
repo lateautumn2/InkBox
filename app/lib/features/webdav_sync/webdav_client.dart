@@ -35,8 +35,8 @@ class WebDavClient {
     required this.password,
     this.maxRetries = 3,
   }) : baseUrl = baseUrl.endsWith('/')
-            ? baseUrl.substring(0, baseUrl.length - 1)
-            : baseUrl;
+           ? baseUrl.substring(0, baseUrl.length - 1)
+           : baseUrl;
 
   final String baseUrl;
   final String username;
@@ -52,7 +52,9 @@ class WebDavClient {
   }
 
   Uri _resolveUri(String relativePath) {
-    final clean = relativePath.startsWith('/') ? relativePath : '/$relativePath';
+    final clean = relativePath.startsWith('/')
+        ? relativePath
+        : '/$relativePath';
     return Uri.parse('$baseUrl$clean');
   }
 
@@ -87,7 +89,9 @@ class WebDavClient {
           attempt < maxRetries &&
           bodyStream == null) {
         await resp.drain<void>();
-        await Future<void>.delayed(Duration(milliseconds: 500 * attempt * attempt));
+        await Future<void>.delayed(
+          Duration(milliseconds: 500 * attempt * attempt),
+        );
         continue;
       }
       return resp;
@@ -148,7 +152,9 @@ class WebDavClient {
 
   /// Lists immediate children of [relativeDir] via PROPFIND Depth: 1.
   Future<List<WebDavEntry>> listDirectory(String relativeDir) async {
-    final normalized = relativeDir.endsWith('/') ? relativeDir : '$relativeDir/';
+    final normalized = relativeDir.endsWith('/')
+        ? relativeDir
+        : '$relativeDir/';
     final resp = await _sendWithRetry(
       'PROPFIND',
       normalized,
@@ -193,7 +199,9 @@ class WebDavClient {
     final matches = responseRe.allMatches(body).toList();
     for (var i = 0; i < matches.length; i++) {
       final block = matches[i].group(1) ?? '';
-      final href = Uri.decodeFull(hrefRe.firstMatch(block)?.group(1)?.trim() ?? '');
+      final href = Uri.decodeFull(
+        hrefRe.firstMatch(block)?.group(1)?.trim() ?? '',
+      );
       if (href.isEmpty) continue;
       // Skip the directory itself (typically first entry).
       if (i == 0 &&
@@ -201,8 +209,11 @@ class WebDavClient {
               '${href.replaceFirst(RegExp(r'/$'), '')}/' == normalized)) {
         continue;
       }
-      final trimmed = href.endsWith('/') ? href.substring(0, href.length - 1) : href;
-      final name = trimmed.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
+      final trimmed = href.endsWith('/')
+          ? href.substring(0, href.length - 1)
+          : href;
+      final name =
+          trimmed.split('/').where((s) => s.isNotEmpty).lastOrNull ?? '';
       if (name.isEmpty) continue;
       entries.add(
         WebDavEntry(
@@ -269,7 +280,11 @@ class WebDavClient {
   }
 
   /// Streams a remote file to a local target path with zero full-file RAM buffering.
-  Future<bool> downloadFile(String relativePath, File targetFile) async {
+  Future<bool> downloadFile(
+    String relativePath,
+    File targetFile, {
+    int? maxBytes,
+  }) async {
     final resp = await _sendWithRetry('GET', relativePath);
     if (resp.statusCode == 404) {
       await resp.drain<void>();
@@ -282,7 +297,18 @@ class WebDavClient {
     await targetFile.parent.create(recursive: true);
     final sink = targetFile.openWrite();
     try {
-      await resp.pipe(sink);
+      var bytes = 0;
+      await resp
+          .map((chunk) {
+            bytes += chunk.length;
+            if (maxBytes != null && bytes > maxBytes) {
+              throw const FormatException(
+                'WebDAV backup exceeds the download limit',
+              );
+            }
+            return chunk;
+          })
+          .pipe(sink);
     } finally {
       await sink.close();
     }

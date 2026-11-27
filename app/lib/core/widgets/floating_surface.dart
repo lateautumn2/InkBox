@@ -13,6 +13,7 @@ class FloatingCard extends StatelessWidget {
     this.padding = const EdgeInsets.all(14),
     this.margin,
     this.radius,
+    this.borderRadius,
     this.onTap,
     this.onLongPress,
     this.backgroundColor,
@@ -24,6 +25,7 @@ class FloatingCard extends StatelessWidget {
   final EdgeInsetsGeometry padding;
   final EdgeInsetsGeometry? margin;
   final double? radius;
+  final BorderRadius? borderRadius;
   final VoidCallback? onTap;
   final VoidCallback? onLongPress;
   final Color? backgroundColor;
@@ -33,37 +35,44 @@ class FloatingCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
-    final effectiveRadius = radius ?? tokens.cardRadius;
-    final bg = backgroundColor ??
-        (frosted ? tokens.glassSurface : tokens.cardSurface);
+    final corners =
+        borderRadius ?? BorderRadius.circular(radius ?? tokens.cardRadius);
+    final bg =
+        backgroundColor ?? (frosted ? tokens.glassSurface : tokens.cardSurface);
     final border = borderColor ?? tokens.subtleBorder;
 
     Widget surface = Container(
       decoration: BoxDecoration(
         color: bg,
-        borderRadius: BorderRadius.circular(effectiveRadius),
+        borderRadius: corners,
         border: Border.all(color: border, width: 1),
-        boxShadow: frosted ? tokens.dockShadows : tokens.cardShadows,
+        boxShadow: frosted ? null : tokens.cardShadows,
       ),
       child: Material(
         color: Colors.transparent,
-        borderRadius: BorderRadius.circular(effectiveRadius),
+        borderRadius: corners,
         clipBehavior: Clip.antiAlias,
         child: InkWell(
           onTap: onTap,
           onLongPress: onLongPress,
-          borderRadius: BorderRadius.circular(effectiveRadius),
+          borderRadius: corners,
           child: Padding(padding: padding, child: child),
         ),
       ),
     );
 
     if (frosted) {
-      surface = ClipRRect(
-        borderRadius: BorderRadius.circular(effectiveRadius),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: surface,
+      surface = DecoratedBox(
+        decoration: BoxDecoration(
+          borderRadius: corners,
+          boxShadow: tokens.dockShadows,
+        ),
+        child: ClipRRect(
+          borderRadius: corners,
+          child: BackdropFilter(
+            filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
+            child: surface,
+          ),
         ),
       );
     }

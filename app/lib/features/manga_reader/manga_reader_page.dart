@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:typed_data';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -809,7 +808,6 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
         padding: EdgeInsets.symmetric(horizontal: hPad),
         itemCount: _totalPages,
         itemBuilder: (context, index) {
-          _source?.preloadAround(index, computeCrop: settings.autoCrop);
           return _MangaSinglePageView(
             source: _source!,
             pageIndex: index,
@@ -1192,7 +1190,8 @@ class _MangaSinglePageViewState extends State<_MangaSinglePageView> {
   void didUpdateWidget(covariant _MangaSinglePageView oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (oldWidget.pageIndex != widget.pageIndex ||
-        oldWidget.source != widget.source) {
+        oldWidget.source != widget.source ||
+        oldWidget.settings.autoCrop != widget.settings.autoCrop) {
       _future = widget.source.loadPage(
         widget.pageIndex,
         computeCrop: widget.settings.autoCrop,
@@ -1247,7 +1246,7 @@ class _MangaSinglePageViewState extends State<_MangaSinglePageView> {
         widget.onDecodedPage?.call(page);
 
         Widget img = Image.memory(
-          Uint8List.fromList(page.bytes),
+          page.bytes,
           fit: widget.isWebtoon ? BoxFit.fitWidth : fit,
           gaplessPlayback: true,
         );

@@ -2,6 +2,22 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+RegExp compileTocRuleForDart(String pattern) {
+  final normalized = pattern
+      .replaceAll('(?i)', '')
+      .replaceAll('(?m)', '')
+      .replaceAllMapped(
+        RegExp(r'\\u\{([0-9a-fA-F]{4})\}'),
+        (match) => r'\u' + match.group(1)!,
+      )
+      .replaceAll(RegExp(r'^[\r\n]+|[\r\n]+$'), '');
+  return RegExp(
+    normalized,
+    multiLine: true,
+    caseSensitive: !pattern.contains('(?i)'),
+  );
+}
+
 /// Parsed TXT TOC rule payload compatible with Legado (`txtTocRule.json`) and custom regexes.
 @immutable
 class ParsedTocRule {

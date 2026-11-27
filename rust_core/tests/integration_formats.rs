@@ -150,3 +150,18 @@ fn end_to_end_webdav_backup_snapshot_roundtrip() {
 
     let _ = std::fs::remove_file(&tmp);
 }
+
+#[test]
+fn webdav_backup_rejects_too_many_entries() {
+    let path = std::env::temp_dir().join(format!(
+        "inkbox_backup_limits_{}.zip",
+        std::process::id()
+    ));
+    let entries = (0..65)
+        .map(|i| (format!("sync/{i}.json"), "{}".to_string()))
+        .collect();
+    pack_backup_snapshot_zip(&entries, &path).unwrap();
+    let restored = unpack_backup_snapshot_zip(&path);
+    let _ = std::fs::remove_file(path);
+    assert_eq!(restored.unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+}

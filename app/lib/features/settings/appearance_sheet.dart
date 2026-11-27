@@ -30,8 +30,10 @@ class _AppearanceSheet extends ConsumerWidget {
     final appearance = ref.watch(appearanceProvider);
     final ctrl = ref.read(appearanceProvider.notifier);
     final wide = isWideLayout(context);
+    final systemBottom = MediaQuery.paddingOf(context).bottom;
 
     return SafeArea(
+      bottom: false,
       child: Center(
         heightFactor: 1.0,
         child: ConstrainedBox(
@@ -43,12 +45,20 @@ class _AppearanceSheet extends ConsumerWidget {
               tokens.isFloatingCard ? 14 : 0,
               0,
               tokens.isFloatingCard ? 14 : 0,
-              tokens.isFloatingCard ? 14 : 0,
+              tokens.isFloatingCard ? systemBottom + 14 : 0,
             ),
             child: FloatingCard(
-              frosted: true,
+              frosted: tokens.isFloatingCard,
               radius: 22,
-              padding: const EdgeInsets.fromLTRB(18, 14, 18, 20),
+              borderRadius: tokens.isFloatingCard
+                  ? null
+                  : const BorderRadius.vertical(top: Radius.circular(22)),
+              padding: EdgeInsets.fromLTRB(
+                18,
+                14,
+                18,
+                20 + (tokens.isFloatingCard ? 0 : systemBottom),
+              ),
               child: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,

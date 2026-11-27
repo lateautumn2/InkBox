@@ -177,7 +177,13 @@ class AppShellScaffold extends StatelessWidget {
               currentIndex: navigationShell.currentIndex,
               onSelect: _onSelectTab,
             ),
-            Expanded(child: navigationShell),
+            Expanded(
+              child: MediaQuery.removePadding(
+                context: context,
+                removeLeft: true,
+                child: navigationShell,
+              ),
+            ),
           ],
         ),
       );
@@ -216,8 +222,8 @@ class AppShellScaffold extends StatelessWidget {
         child: SafeArea(
           maintainBottomViewPadding: true,
           top: false,
-          child: SizedBox(
-            height: 60,
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(minHeight: 60),
             child: Row(
               children: List.generate(items.length, (i) {
                 final item = items[i];
@@ -226,6 +232,7 @@ class AppShellScaffold extends StatelessWidget {
                   child: InkWell(
                     onTap: () => _onSelectTab(i),
                     child: Column(
+                      mainAxisSize: MainAxisSize.min,
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         AnimatedContainer(
@@ -251,6 +258,8 @@ class AppShellScaffold extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           item.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 11,
                             fontWeight:
@@ -287,7 +296,7 @@ class _AdaptiveSideRail extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
-    final railContent = Column(
+    final railItems = Column(
       mainAxisAlignment: MainAxisAlignment.center,
       children: List.generate(items.length, (i) {
         final item = items[i];
@@ -331,6 +340,14 @@ class _AdaptiveSideRail extends StatelessWidget {
         );
       }),
     );
+    final railContent = LayoutBuilder(
+      builder: (context, constraints) => SingleChildScrollView(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(minHeight: constraints.maxHeight),
+          child: railItems,
+        ),
+      ),
+    );
 
     if (tokens.isFloatingCard) {
       return SafeArea(
@@ -359,13 +376,15 @@ class _AdaptiveSideRail extends StatelessWidget {
       );
     }
 
-    return Container(
-      width: 76,
+    return DecoratedBox(
       decoration: BoxDecoration(
         color: tokens.cardSurface,
         border: Border(right: BorderSide(color: tokens.subtleBorder)),
       ),
-      child: SafeArea(right: false, child: railContent),
+      child: SafeArea(
+        right: false,
+        child: SizedBox(width: 76, child: railContent),
+      ),
     );
   }
 }
@@ -392,7 +411,7 @@ class _FloatingBottomPillDock extends StatelessWidget {
       child: ClipRRect(
         borderRadius: BorderRadius.circular(999),
         child: Container(
-          height: 58,
+          constraints: const BoxConstraints(minHeight: 58),
           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
           decoration: BoxDecoration(
             color: tokens.cardSurface,
@@ -429,6 +448,8 @@ class _FloatingBottomPillDock extends StatelessWidget {
                         const SizedBox(height: 2),
                         Text(
                           item.label,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
                           style: TextStyle(
                             fontSize: 10.5,
                             fontWeight:

@@ -1381,6 +1381,60 @@ class AppLocalizationsJa extends AppLocalizations {
   }
 
   @override
+  String get readAloudLabel => '読み上げ';
+
+  @override
+  String get webdavDeviceNameLabel => '端末名';
+
+  @override
+  String get readerLocalFileUnavailable => 'ローカルファイルを利用できません';
+
+  @override
+  String get readerBodyTitle => '本文';
+
+  @override
+  String get readerPrefaceTitle => '序文';
+
+  @override
+  String readerLocalFileMissing(String path) {
+    return '書籍ファイル $path が見つかりません。再インポートしてください。';
+  }
+
+  @override
+  String readerCoreUnavailable(String format) {
+    return '解析エンジンを利用できないため、$format 形式を読み込めません。';
+  }
+
+  @override
+  String tocRulesImported(int count) {
+    return '目次ルールを $count 件インポートしました';
+  }
+
+  @override
+  String get tocRulesNotFound => 'インポートできる目次ルールがありません';
+
+  @override
+  String get tocRuleInvalidRegex => '正規表現が無効です';
+
+  @override
+  String get tocRuleEmptyRegex => '正規表現を入力してください';
+
+  @override
+  String get tocRuleMissingName => 'ルール名を入力してください';
+
+  @override
+  String get tocRuleExampleLabel => '例';
+
+  @override
+  String get tocRuleSampleText =>
+      '序章 雪の夜\n一晩中、雪が降った。\n第1章 目覚め\n谷は静かだった。\n第2章 渡河\n道は西へと続いていた。';
+
+  @override
+  String tocRuleTestMatches(int count) {
+    return '一致した章タイトルは $count 件です';
+  }
+
+  @override
   String get tapZoneSectionLabel => 'タップ領域（セルをタップして変更）';
 
   @override

@@ -27,9 +27,6 @@ class TocRulesPage extends ConsumerStatefulWidget {
 }
 
 class _TocRulesPageState extends ConsumerState<TocRulesPage> {
-  static const _defaultSample =
-      '楔子 雪夜\n漫天风雪。\n第一章 黑暗森林\n罗辑抬头望向星空。\n第 2 章 面壁者\n计划正式开始。\n1、序幕\n雨夜降临。\nChapter 1 Awakening\nA quiet valley.\n☆、番外 旧梦\n微风轻拂。';
-
   void _toast(String msg) {
     if (!mounted) return;
     ScaffoldMessenger.of(context)
@@ -42,8 +39,10 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
   Future<void> _importFromFile() async {
     final l10n = context.l10n;
     final storage = ref.read(libraryStorageProvider);
-    final picked =
-        await ref.read(platformBridgeProvider).pickDocumentsDetailed();
+    final db = ref.read(appDatabaseProvider);
+    final picked = await ref
+        .read(platformBridgeProvider)
+        .pickDocumentsDetailed();
     if (picked.paths.isEmpty) {
       if (picked.errors.isNotEmpty) {
         _toast(localizeError(l10n, picked.errors.first));
@@ -57,8 +56,7 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
         final raw = utf8.decode(bytes, allowMalformed: true);
         final parsed = TocRulesCatalog.parseImportedContent(raw);
         if (parsed.isNotEmpty) {
-          importedTotal +=
-              await ref.read(appDatabaseProvider).importTocRules(parsed);
+          importedTotal += await db.importTocRules(parsed);
         }
       } catch (e) {
         _toast(localizeError(l10n, e));
@@ -68,9 +66,9 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
     }
     if (!mounted) return;
     if (importedTotal > 0) {
-      _toast(l10n.tocReloadedCount(importedTotal));
+      _toast(l10n.tocRulesImported(importedTotal));
     } else {
-      _toast(l10n.noTocFound);
+      _toast(l10n.tocRulesNotFound);
     }
   }
 
@@ -100,8 +98,9 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
               label: ctx.l10n.pasteFromClipboard,
               onTap: () async {
                 final data = await Clipboard.getData(Clipboard.kTextPlain);
-                if (data?.text != null && data!.text!.isNotEmpty) {
-                  ctrl.text = data.text!;
+                final text = data?.text;
+                if (ctx.mounted && text != null && text.isNotEmpty) {
+                  ctrl.text = text;
                 }
               },
             ),
@@ -119,40 +118,53 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
         ),
       ],
     );
-    if (pastedText == null) return;
+    if (pastedText == null || !mounted) return;
     final parsed = TocRulesCatalog.parseImportedContent(pastedText);
     if (parsed.isEmpty) {
-      if (mounted) _toast(l10n.errInvalidAudio.isNotEmpty ? l10n.noTocFound : '');
+      _toast(l10n.tocRulesNotFound);
       return;
     }
     final count = await ref.read(appDatabaseProvider).importTocRules(parsed);
-    if (mounted) _toast('+$count');
+    if (mounted) _toast(l10n.tocRulesImported(count));
   }
 
-  String? _validateRulePattern(String pat) {
+  ({int count, List<String> titles, String? error}) _testRule(
+    String pattern,
+    String sample, {
+    int preview = 0,
+  }) {
     final rust = ref.read(rustCoreProvider);
     if (rust != null) {
       try {
         final res = rust.testTocRule(
-          pattern: pat,
-          sampleText: 'Chapter 1\nBody',
-          maxPreview: 1,
+          pattern: pattern,
+          sampleText: sample,
+          maxPreview: preview,
         );
-        if (res['valid'] != true) {
-          return res['error']?.toString() ?? 'Invalid regex';
-        }
-        return null;
-      } catch (_) {}
+        return (
+          count: (res['match_count'] as num?)?.toInt() ?? 0,
+          titles: (res['preview_titles'] as List<dynamic>? ?? const [])
+              .cast<String>(),
+          error: res['valid'] == true ? null : res['error']?.toString() ?? '',
+        );
+      } catch (_) {
+        // Use the Dart fallback if the native engine is unavailable.
+      }
     }
     try {
-      RegExp(
-        pat.replaceAll('(?i)', '').replaceAll('(?m)', ''),
-        multiLine: true,
-        caseSensitive: !pat.contains('(?i)'),
+      final regex = compileTocRuleForDart(pattern);
+      final hits = regex
+          .allMatches(sample)
+          .map((match) => (match.group(0) ?? '').trim())
+          .where((title) => title.isNotEmpty)
+          .toList();
+      return (
+        count: hits.length,
+        titles: hits.take(preview).toList(),
+        error: null,
       );
-      return null;
-    } catch (e) {
-      return e.toString();
+    } on FormatException catch (error) {
+      return (count: 0, titles: const [], error: error.message);
     }
   }
 
@@ -161,85 +173,54 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
     final nameCtrl = TextEditingController(text: existing?.name ?? '');
     final ruleCtrl = TextEditingController(text: existing?.rule ?? '');
     final exampleCtrl = TextEditingController(text: existing?.example ?? '');
+    final defaultSample = l10n.tocRuleSampleText;
     final sampleCtrl = TextEditingController(
       text: existing != null && existing.example.isNotEmpty
-          ? '${existing.example.replaceAll(' / ', '\n')}\n$_defaultSample'
-          : _defaultSample,
+          ? '${existing.example.replaceAll(' / ', '\n')}\n$defaultSample'
+          : defaultSample,
     );
-    String? testSummary;
-    bool testError = false;
+    final feedback = ValueNotifier<({String text, bool isError})?>(null);
 
-    final result = await showInkModal<({String name, String pat, String example})>(
-      context: context,
-      title: existing == null ? l10n.newRuleTitle : l10n.editRuleTitle,
-      disposables: [nameCtrl, ruleCtrl, exampleCtrl, sampleCtrl],
-      builder: (ctx) {
-        final tokens = InkBoxTokens.of(ctx);
-        final ctxL10n = ctx.l10n;
-        return StatefulBuilder(
-          builder: (ctx, setModalState) {
-            void runTest() {
-              final pat = ruleCtrl.text.trim();
-              if (pat.isEmpty) {
-                setModalState(() {
-                  testError = true;
-                  testSummary = 'Empty regex';
-                });
-                return;
-              }
-              final rust = ref.read(rustCoreProvider);
-              if (rust != null) {
-                try {
-                  final res = rust.testTocRule(
-                    pattern: pat,
-                    sampleText: sampleCtrl.text,
-                    maxPreview: 6,
-                  );
-                  if (res['valid'] == true) {
-                    final count = (res['match_count'] as num?)?.toInt() ?? 0;
-                    final titles =
-                        (res['preview_titles'] as List<dynamic>? ?? const [])
-                            .cast<String>();
-                    setModalState(() {
-                      testError = false;
-                      testSummary = count == 0
-                          ? '0'
-                          : '$count: ${titles.join(' / ')}';
-                    });
-                  } else {
-                    setModalState(() {
-                      testError = true;
-                      testSummary = '${res['error']}';
-                    });
-                  }
-                  return;
-                } catch (_) {}
-              }
-              try {
-                final re = RegExp(
-                  pat.replaceAll('(?i)', ''),
-                  multiLine: true,
-                  caseSensitive: !pat.contains('(?i)'),
-                );
-                final hits = re
-                    .allMatches(sampleCtrl.text)
-                    .map((m) => (m.group(0) ?? '').trim())
-                    .where((s) => s.isNotEmpty)
-                    .toList();
-                setModalState(() {
-                  testError = false;
-                  testSummary = hits.isEmpty
-                      ? '0'
-                      : '${hits.length}: ${hits.take(6).join(' / ')}';
-                });
-              } catch (e) {
-                setModalState(() {
-                  testError = true;
-                  testSummary = '$e';
-                });
-              }
-            }
+    void showError(String message) {
+      feedback.value = (text: message, isError: true);
+    }
 
+    void showRegexError(String detail) {
+      showError(
+        detail.isEmpty
+            ? l10n.tocRuleInvalidRegex
+            : '${l10n.tocRuleInvalidRegex}\n$detail',
+      );
+    }
+
+    void runTest() {
+      final pattern = ruleCtrl.text.trim();
+      if (pattern.isEmpty) {
+        showError(l10n.tocRuleEmptyRegex);
+        return;
+      }
+      final tested = _testRule(pattern, sampleCtrl.text, preview: 6);
+      if (tested.error case final error?) {
+        showRegexError(error);
+        return;
+      }
+      feedback.value = (
+        text: [
+          l10n.tocRuleTestMatches(tested.count),
+          ...tested.titles,
+        ].join('\n'),
+        isError: false,
+      );
+    }
+
+    final result =
+        await showInkModal<({String name, String pat, String example})>(
+          context: context,
+          title: existing == null ? l10n.newRuleTitle : l10n.editRuleTitle,
+          disposables: [nameCtrl, ruleCtrl, exampleCtrl, sampleCtrl, feedback],
+          builder: (ctx) {
+            final tokens = InkBoxTokens.of(ctx);
+            final ctxL10n = ctx.l10n;
             return Column(
               mainAxisSize: MainAxisSize.min,
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -259,7 +240,7 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
                 const SizedBox(height: 10),
                 InkTextField(
                   controller: exampleCtrl,
-                  label: ctxL10n.examplePrefix('').replaceAll(': ', '').replaceAll('：', ''),
+                  label: ctxL10n.tocRuleExampleLabel,
                 ),
                 const SizedBox(height: 10),
                 InkTextField(
@@ -274,63 +255,79 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
                   leadingIcon: InkIcon.spark,
                   onTap: runTest,
                 ),
-                if (testSummary != null) ...[
-                  const SizedBox(height: 8),
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: testError
-                          ? tokens.accentWarm.withValues(alpha: 0.14)
-                          : tokens.accentSoft,
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: Text(
-                      testSummary!,
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color:
-                            testError ? tokens.accentWarm : tokens.inkPrimary,
+                ValueListenableBuilder(
+                  valueListenable: feedback,
+                  builder: (context, value, _) {
+                    if (value == null) return const SizedBox.shrink();
+                    return Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(top: 8),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: value.isError
+                            ? tokens.accentWarm.withValues(alpha: 0.14)
+                            : tokens.accentSoft,
+                        borderRadius: BorderRadius.circular(12),
                       ),
-                    ),
-                  ),
-                ],
+                      child: Text(
+                        value.text,
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          color: value.isError
+                              ? tokens.accentWarm
+                              : tokens.inkPrimary,
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ],
             );
           },
+          actionsBuilder: (ctx) => [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(ctx.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: () {
+                final name = nameCtrl.text.trim();
+                final pattern = ruleCtrl.text.replaceAll(
+                  RegExp(r'^[\r\n]+|[\r\n]+$'),
+                  '',
+                );
+                if (name.isEmpty) {
+                  showError(l10n.tocRuleMissingName);
+                  return;
+                }
+                if (pattern.trim().isEmpty) {
+                  showError(l10n.tocRuleEmptyRegex);
+                  return;
+                }
+                final tested = _testRule(pattern, '');
+                if (tested.error case final error?) {
+                  showRegexError(error);
+                  return;
+                }
+                Navigator.of(ctx).pop((
+                  name: name,
+                  pat: pattern,
+                  example: exampleCtrl.text.trim(),
+                ));
+              },
+              child: Text(ctx.l10n.save),
+            ),
+          ],
         );
-      },
-      actionsBuilder: (ctx) => [
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: Text(ctx.l10n.cancel),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(ctx).pop((
-            name: nameCtrl.text.trim(),
-            pat: ruleCtrl.text.replaceAll(RegExp(r'^[\r\n]+|[\r\n]+$'), ''),
-            example: exampleCtrl.text.trim(),
-          )),
-          child: Text(ctx.l10n.save),
-        ),
-      ],
-    );
 
-    if (result == null) return;
-    final name = result.name;
-    final pat = result.pat;
-    final example = result.example;
-    if (name.isEmpty || pat.trim().isEmpty) return;
-    final regexErr = _validateRulePattern(pat);
-    if (regexErr != null) {
-      _toast(regexErr);
-      return;
-    }
-    await ref.read(appDatabaseProvider).saveTocRule(
+    if (result == null || !mounted) return;
+    await ref
+        .read(appDatabaseProvider)
+        .saveTocRule(
           id: existing?.id,
-          name: name,
-          rule: pat,
-          example: example,
+          name: result.name,
+          rule: result.pat,
+          example: result.example,
           enabled: existing?.enabled ?? true,
         );
   }
@@ -356,7 +353,7 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
         ),
       ],
     );
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
     await ref.read(appDatabaseProvider).deleteTocRule(rule.id);
   }
 
@@ -388,7 +385,7 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
         ),
       ],
     );
-    if (action == null) return;
+    if (action == null || !mounted) return;
     switch (action) {
       case 'import_file':
         await _importFromFile();
@@ -501,12 +498,16 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
                               color: tokens.accentPrimary,
                             ),
                             const SizedBox(width: 6),
-                            Text(
-                              l10n.importRuleFile,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                color: tokens.inkPrimary,
+                            Flexible(
+                              child: Text(
+                                l10n.importRuleFile,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: tokens.inkPrimary,
+                                ),
                               ),
                             ),
                           ],
@@ -530,12 +531,16 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
                               color: tokens.accentPrimary,
                             ),
                             const SizedBox(width: 6),
-                            Text(
-                              l10n.pasteJsonImport,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                fontWeight: FontWeight.w600,
-                                color: tokens.inkPrimary,
+                            Flexible(
+                              child: Text(
+                                l10n.pasteJsonImport,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: TextStyle(
+                                  fontSize: 12.5,
+                                  fontWeight: FontWeight.w600,
+                                  color: tokens.inkPrimary,
+                                ),
                               ),
                             ),
                           ],

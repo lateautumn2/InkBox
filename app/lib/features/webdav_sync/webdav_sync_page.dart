@@ -1,4 +1,4 @@
-﻿import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
@@ -43,25 +43,37 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
     _svc = WebDavSyncService(
       db: ref.read(appDatabaseProvider),
       rustCore: ref.read(rustCoreProvider),
+      platform: ref.read(platformBridgeProvider),
     );
     _loadConfig();
   }
 
   Future<void> _loadConfig() async {
-    final loaded = await _svc.loadConfig();
-    if (!mounted) return;
-    setState(() {
-      _cfg = loaded;
-      if (loaded.isConfigured) {
-        _statusOverride =
-            '${loaded.presetName} · ${loaded.serverUrl}${loaded.remoteRoot}';
-      }
-    });
+    try {
+      final loaded = await _svc.loadConfig();
+      if (!mounted) return;
+      setState(() {
+        _cfg = loaded;
+        if (loaded.isConfigured) {
+          _statusOverride =
+              '${loaded.presetName} · ${loaded.serverUrl}${loaded.remoteRoot}';
+        }
+      });
+    } catch (error) {
+      if (mounted) _toast(context.l10n.webdavTestFailed('$error'));
+    }
   }
 
-  Future<void> _saveCfg(WebDavConfig next) async {
-    setState(() => _cfg = next);
-    await _svc.saveConfig(next);
+  Future<bool> _saveCfg(WebDavConfig next) async {
+    try {
+      await _svc.saveConfig(next);
+      if (!mounted) return false;
+      setState(() => _cfg = next);
+      return true;
+    } catch (error) {
+      if (mounted) _toast(context.l10n.webdavTestFailed('$error'));
+      return false;
+    }
   }
 
   Future<void> _openConfigDialog({
@@ -70,63 +82,73 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
   }) async {
     final l10n = context.l10n;
     final urlCtrl = TextEditingController(
-      text: presetUrl ??
+      text:
+          presetUrl ??
           (_cfg.serverUrl.isNotEmpty ? _cfg.serverUrl : _presets['坚果云']!),
     );
     final userCtrl = TextEditingController(text: _cfg.username);
     final passCtrl = TextEditingController(text: _cfg.password);
     final rootCtrl = TextEditingController(text: _cfg.remoteRoot);
+    final deviceCtrl = TextEditingController(text: _cfg.deviceName);
 
     final result =
-        await showInkModal<({String url, String user, String pass, String root})>(
-      context: context,
-      title: l10n.webdavConfigTitle(presetName ?? _cfg.presetName),
-      disposables: [urlCtrl, userCtrl, passCtrl, rootCtrl],
-      builder: (ctx) => Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          InkTextField(
-            controller: urlCtrl,
-            label: ctx.l10n.webdavServerUrlLabel,
-            hintText: 'https://dav.jianguoyun.com/dav',
-            keyboardType: TextInputType.url,
+        await showInkModal<
+          ({String url, String user, String pass, String root, String device})
+        >(
+          context: context,
+          title: l10n.webdavConfigTitle(presetName ?? _cfg.presetName),
+          disposables: [urlCtrl, userCtrl, passCtrl, rootCtrl, deviceCtrl],
+          builder: (ctx) => Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              InkTextField(
+                controller: urlCtrl,
+                label: ctx.l10n.webdavServerUrlLabel,
+                hintText: 'https://dav.jianguoyun.com/dav',
+                keyboardType: TextInputType.url,
+              ),
+              const SizedBox(height: 10),
+              InkTextField(
+                controller: userCtrl,
+                label: ctx.l10n.webdavUserLabel,
+                hintText: 'name@example.com',
+              ),
+              const SizedBox(height: 10),
+              InkTextField(
+                controller: passCtrl,
+                obscureText: true,
+                label: ctx.l10n.webdavPassLabel,
+              ),
+              const SizedBox(height: 10),
+              InkTextField(
+                controller: rootCtrl,
+                label: ctx.l10n.webdavRootLabel,
+                hintText: '/InkBox',
+              ),
+              const SizedBox(height: 10),
+              InkTextField(
+                controller: deviceCtrl,
+                label: ctx.l10n.webdavDeviceNameLabel,
+              ),
+            ],
           ),
-          const SizedBox(height: 10),
-          InkTextField(
-            controller: userCtrl,
-            label: ctx.l10n.webdavUserLabel,
-            hintText: 'name@example.com',
-          ),
-          const SizedBox(height: 10),
-          InkTextField(
-            controller: passCtrl,
-            obscureText: true,
-            label: ctx.l10n.webdavPassLabel,
-          ),
-          const SizedBox(height: 10),
-          InkTextField(
-            controller: rootCtrl,
-            label: ctx.l10n.webdavRootLabel,
-            hintText: '/InkBox',
-          ),
-        ],
-      ),
-      actionsBuilder: (ctx) => [
-        TextButton(
-          onPressed: () => Navigator.of(ctx).pop(),
-          child: Text(ctx.l10n.cancel),
-        ),
-        FilledButton(
-          onPressed: () => Navigator.of(ctx).pop((
-            url: urlCtrl.text.trim(),
-            user: userCtrl.text.trim(),
-            pass: passCtrl.text,
-            root: rootCtrl.text.trim(),
-          )),
-          child: Text(ctx.l10n.webdavSaveAndTest),
-        ),
-      ],
-    );
+          actionsBuilder: (ctx) => [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(ctx.l10n.cancel),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.of(ctx).pop((
+                url: urlCtrl.text.trim(),
+                user: userCtrl.text.trim(),
+                pass: passCtrl.text,
+                root: rootCtrl.text.trim(),
+                device: deviceCtrl.text.trim(),
+              )),
+              child: Text(ctx.l10n.webdavSaveAndTest),
+            ),
+          ],
+        );
 
     if (result == null) return;
     final next = _cfg.copyWith(
@@ -135,9 +157,9 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
       password: result.pass,
       remoteRoot: result.root.isEmpty ? '/InkBox' : result.root,
       presetName: presetName ?? _cfg.presetName,
+      deviceName: result.device.isEmpty ? _cfg.deviceName : result.device,
     );
-    await _saveCfg(next);
-    await _testConnection();
+    if (await _saveCfg(next)) await _testConnection();
   }
 
   Future<void> _testConnection() async {
@@ -185,6 +207,7 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
       final report = await _svc.syncAll(
         _cfg,
         localPreferencesSnapshot: prefsSnap,
+        applyPreferences: _applyPreferences,
       );
       if (!mounted) return;
       final l10n = context.l10n;
@@ -219,8 +242,10 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
         'book_reader': ref.read(bookReaderSettingsProvider).toJson(),
         'manga_reader': ref.read(mangaReaderSettingsProvider).toJson(),
       };
-      final name =
-          await _svc.createBackupSnapshot(_cfg, preferences: prefsSnap);
+      final name = await _svc.createBackupSnapshot(
+        _cfg,
+        preferences: prefsSnap,
+      );
       final list = await _svc.listBackupSnapshots(_cfg);
       if (!mounted) return;
       setState(() => _backups = list);
@@ -235,12 +260,32 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
   Future<void> _restoreBackup(String fileName) async {
     setState(() => _busy = true);
     try {
-      await _svc.restoreBackupSnapshot(_cfg, fileName);
+      await _svc.restoreBackupSnapshot(
+        _cfg,
+        fileName,
+        applyPreferences: _applyPreferences,
+      );
       if (mounted) _toast(context.l10n.webdavSyncDone);
     } catch (e) {
       if (mounted) _toast(context.l10n.webdavTestFailed('$e'));
     } finally {
       if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _applyPreferences(Map<String, dynamic> snapshot) async {
+    if (!mounted) return;
+    final book = snapshot['book_reader'];
+    final manga = snapshot['manga_reader'];
+    if (book is Map<String, dynamic>) {
+      await ref
+          .read(bookReaderSettingsProvider.notifier)
+          .applySnapshotJson(book);
+    }
+    if (mounted && manga is Map<String, dynamic>) {
+      await ref
+          .read(mangaReaderSettingsProvider.notifier)
+          .applySnapshotJson(manga);
     }
   }
 
@@ -357,8 +402,10 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
                 padding: const EdgeInsets.fromLTRB(14, 10, 14, 8),
                 child: FloatingCard(
                   radius: 18,
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 12,
+                    vertical: 8,
+                  ),
                   child: Row(
                     children: [
                       InkCircleButton(
@@ -454,8 +501,9 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
                                             color: _connected
                                                 ? tokens.statusOk
                                                 : tokens.surfaceVariant,
-                                            borderRadius:
-                                                BorderRadius.circular(999),
+                                            borderRadius: BorderRadius.circular(
+                                              999,
+                                            ),
                                           ),
                                           child: Text(
                                             _connected
@@ -500,11 +548,14 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
                                   icon: InkIconWidget(
                                     InkIcon.refresh,
                                     size: 15,
-                                    color:
-                                        Theme.of(context).colorScheme.onPrimary,
+                                    color: Theme.of(context)
+                                        .colorScheme
+                                        .onPrimary,
                                   ),
                                   label: Text(
-                                    _busy ? l10n.webdavSyncing : l10n.webdavSyncNow,
+                                    _busy
+                                        ? l10n.webdavSyncing
+                                        : l10n.webdavSyncNow,
                                   ),
                                 ),
                               ),
@@ -513,7 +564,9 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
                                 child: OutlinedButton(
                                   style: OutlinedButton.styleFrom(
                                     shape: const StadiumBorder(),
-                                    side: BorderSide(color: tokens.subtleBorder),
+                                    side: BorderSide(
+                                      color: tokens.subtleBorder,
+                                    ),
                                   ),
                                   onPressed: _busy ? null : _createBackup,
                                   child: Text(
@@ -600,7 +653,8 @@ class _WebDavSyncPageState extends ConsumerState<WebDavSyncPage> {
                               return InkPillChip(
                                 label: e.key,
                                 selected:
-                                    _cfg.isConfigured && _cfg.presetName == e.key,
+                                    _cfg.isConfigured &&
+                                    _cfg.presetName == e.key,
                                 onTap: () => _openConfigDialog(
                                   presetName: e.key,
                                   presetUrl: e.value,

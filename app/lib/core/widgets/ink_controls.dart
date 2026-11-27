@@ -187,8 +187,9 @@ class InkSwitch extends StatelessWidget {
     final enabled = onChanged != null;
     final trackOn = activeColor ?? tokens.accentPrimary;
     final trackOff = inactiveColor ?? tokens.surfaceVariant;
-    final knobColor = thumbColor ??
-        (value ? Theme.of(context).colorScheme.onPrimary : tokens.cardSurface);
+    final knobColor =
+        thumbColor ??
+        (value ? Theme.of(context).colorScheme.onPrimary : tokens.inkMuted);
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: enabled ? () => onChanged!(!value) : null,
@@ -346,8 +347,10 @@ Future<T?> showInkOptionSheet<T>({
     builder: (ctx) {
       final tokens = InkBoxTokens.of(ctx);
       final bottomInset = MediaQuery.viewInsetsOf(ctx).bottom;
+      final systemBottom = MediaQuery.paddingOf(ctx).bottom;
       final isWide = MediaQuery.sizeOf(ctx).width >= 600;
       return SafeArea(
+        bottom: false,
         child: Center(
           heightFactor: 1.0,
           child: ConstrainedBox(
@@ -359,12 +362,20 @@ Future<T?> showInkOptionSheet<T>({
                 tokens.isFloatingCard ? 14 : 0,
                 0,
                 tokens.isFloatingCard ? 14 : 0,
-                (tokens.isFloatingCard ? 14 : 0) + bottomInset,
+                (tokens.isFloatingCard ? systemBottom + 14 : 0) + bottomInset,
               ),
               child: FloatingCard(
-                frosted: true,
+                frosted: tokens.isFloatingCard,
                 radius: 22,
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+                borderRadius: tokens.isFloatingCard
+                    ? null
+                    : const BorderRadius.vertical(top: Radius.circular(22)),
+                padding: EdgeInsets.fromLTRB(
+                  16,
+                  12,
+                  16,
+                  16 + (tokens.isFloatingCard ? 0 : systemBottom),
+                ),
                 child: ConstrainedBox(
                   constraints: BoxConstraints(
                     maxHeight: MediaQuery.sizeOf(ctx).height * 0.72,
@@ -526,45 +537,43 @@ Future<T?> showInkModal<T>({
             child: FloatingCard(
               radius: 22,
               padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    title,
-                    style: TextStyle(
-                      fontSize: 16.5,
-                      fontWeight: FontWeight.w700,
-                      color: tokens.inkPrimary,
-                    ),
-                  ),
-                  if (subtitle != null && subtitle.isNotEmpty) ...[
-                    const SizedBox(height: 4),
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
                     Text(
-                      subtitle,
-                      style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+                      title,
+                      style: TextStyle(
+                        fontSize: 16.5,
+                        fontWeight: FontWeight.w700,
+                        color: tokens.inkPrimary,
+                      ),
                     ),
+                    if (subtitle != null && subtitle.isNotEmpty) ...[
+                      const SizedBox(height: 4),
+                      Text(
+                        subtitle,
+                        style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+                      ),
+                    ],
+                    const SizedBox(height: 14),
+                    builder(ctx),
+                    if (actions.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      OverflowBar(
+                        alignment: MainAxisAlignment.end,
+                        spacing: 8,
+                        overflowSpacing: 4,
+                        overflowAlignment: OverflowBarAlignment.end,
+                        children: actions,
+                      ),
+                    ],
                   ],
-                  const SizedBox(height: 14),
-                  builder(ctx),
-                  if (actions.isNotEmpty) ...[
-                    const SizedBox(height: 16),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        for (var i = 0; i < actions.length; i++) ...[
-                          if (i > 0) const SizedBox(width: 8),
-                          actions[i],
-                        ],
-                      ],
-                    ),
-                  ],
-                ],
+                ),
               ),
             ),
           ),
-        ),
         ),
       );
     },

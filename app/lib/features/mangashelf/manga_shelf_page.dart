@@ -52,6 +52,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
 
   Future<void> _batchMoveShelf(List<Shelf> shelves, int currentShelfId) async {
     final db = ref.read(appDatabaseProvider);
+    final ids = _selectedIds.toList(growable: false);
     final targetShelfId = await showMoveToShelfDialog(
       context: context,
       db: db,
@@ -59,11 +60,11 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
       shelves: shelves,
       currentShelfId: currentShelfId,
     );
-    if (targetShelfId == null) return;
-    final count = _selectedIds.length;
-    await db.moveMangasToShelf(_selectedIds, targetShelfId);
+    if (targetShelfId == null || !mounted) return;
+    final count = ids.length;
+    await db.moveMangasToShelf(ids, targetShelfId);
     if (!mounted) return;
-    setState(() => _selectedIds.clear());
+    setState(() => _selectedIds.removeAll(ids));
     final updatedShelves = await db.getShelves('comic');
     final targetShelf =
         updatedShelves.where((s) => s.id == targetShelfId).firstOrNull;
@@ -77,7 +78,8 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
 
   Future<void> _batchRemoveMangas() async {
     final l10n = context.l10n;
-    final count = _selectedIds.length;
+    final ids = _selectedIds.toList(growable: false);
+    final count = ids.length;
     final choice = await showInkOptionSheet<String>(
       context: context,
       title: l10n.removeMangaTitle(count),
@@ -97,13 +99,11 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
     );
     if (choice == null || !mounted) return;
     if (choice == 'archive') {
-      await ref.read(appDatabaseProvider).archiveMangasByIds(_selectedIds);
+      await ref.read(appDatabaseProvider).archiveMangasByIds(ids);
     } else if (choice == 'permanent') {
-      await ref
-          .read(importServiceProvider)
-          .permanentlyDeleteMangas(_selectedIds);
+      await ref.read(importServiceProvider).permanentlyDeleteMangas(ids);
     }
-    setState(() => _selectedIds.clear());
+    if (mounted) setState(() => _selectedIds.removeAll(ids));
   }
 
   @override
@@ -119,7 +119,10 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
     final activeShelf = shelves.where((s) => s.id == activeShelfId).firstOrNull;
     final headerTitle = localizedShelfName(l10n, activeShelf, isComic: true);
     final selecting = _selectedIds.isNotEmpty;
-    final navBottomInset = MediaQuery.paddingOf(context).bottom;
+    final navBottomInset = KeyboardInsetPadding.remainingBottomPaddingOf(
+      context,
+      enabled: _showSearch,
+    );
     final wide = isWideLayout(context);
 
     final shelf = SafeArea(
@@ -230,9 +233,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                           m.author.toLowerCase().contains(_query.toLowerCase());
                       return groupOk && unreadOk && qMatch;
                     }).toList();
-                    final bottomPad = wide
-                        ? 88.0
-                        : (tokens.isFloatingCard ? navBottomInset + 116.0 : 80.0);
+                    final bottomPad = navBottomInset + 80;
 
                     return Column(
                       children: [
@@ -261,13 +262,11 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                         Expanded(
                           child: filtered.isEmpty
                               ? Center(
-                                  child: Padding(
+                                  child: SingleChildScrollView(
                                     padding: EdgeInsets.only(
                                       left: 24,
                                       right: 24,
-                                      bottom: (!wide && tokens.isFloatingCard)
-                                          ? 64
-                                          : 16,
+                                      bottom: navBottomInset + 16,
                                     ),
                                     child: Column(
                                       mainAxisSize: MainAxisSize.min,
@@ -397,9 +396,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                 return Positioned(
                   left: 14,
                   right: 14,
-                  bottom: (!wide && tokens.isFloatingCard)
-                      ? navBottomInset + 84
-                      : 14,
+                  bottom: navBottomInset + 14,
                   child: Center(
                     child: ConstrainedBox(
                       constraints: BoxConstraints(
@@ -412,8 +409,9 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                           horizontal: 10,
                           vertical: 8,
                         ),
-                        child: Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceAround,
+                        child: OverflowBar(
+                          alignment: MainAxisAlignment.spaceAround,
+                          overflowAlignment: OverflowBarAlignment.center,
                           children: [
                             TextButton(
                               onPressed: () =>
@@ -429,7 +427,10 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                             TextButton(
                               onPressed: () async {
                                 final db = ref.read(appDatabaseProvider);
-                                for (final id in _selectedIds) {
+                                final ids = _selectedIds.toList(
+                                  growable: false,
+                                );
+                                for (final id in ids) {
                                   await db.updateMangaMeta(
                                     id,
                                     shelfGroup: allFinished ? '在读' : '已读完',
@@ -437,7 +438,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                                   await db.markAllChaptersRead(id, !allFinished);
                                 }
                                 if (mounted) {
-                                  setState(() => _selectedIds.clear());
+                                  setState(() => _selectedIds.removeAll(ids));
                                 }
                               },
                               child: Text(
@@ -471,9 +472,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
           else
             Positioned(
               right: 18,
-              bottom: (!wide && tokens.isFloatingCard)
-                  ? navBottomInset + 84
-                  : 18,
+              bottom: navBottomInset + 18,
               child: FloatingActionButton.small(
                 heroTag: 'manga_import_fab',
                 backgroundColor: tokens.accentPrimary,
@@ -546,11 +545,11 @@ class _MangaGridCard extends StatelessWidget {
                         color: tokens.accentPrimary,
                         shape: BoxShape.circle,
                       ),
-                      child: const Center(
+                      child: Center(
                         child: InkIconWidget(
                           InkIcon.check,
                           size: 12,
-                          color: Colors.white,
+                          color: Theme.of(context).colorScheme.onPrimary,
                         ),
                       ),
                     )
@@ -565,11 +564,11 @@ class _MangaGridCard extends StatelessWidget {
                       ),
                       child: Text(
                         '${manga.unreadCount}',
-                        style: const TextStyle(
+                        style: TextStyle(
                           fontSize: 9.5,
                           fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                          fontFeatures: [FontFeature.tabularFigures()],
+                          color: Theme.of(context).colorScheme.onPrimary,
+                          fontFeatures: const [FontFeature.tabularFigures()],
                         ),
                       ),
                     ),

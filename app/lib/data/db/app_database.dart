@@ -136,8 +136,8 @@ class Shelves extends Table {
 
   @override
   List<Set<Column>> get uniqueKeys => [
-        {name, mediaKind},
-      ];
+    {name, mediaKind},
+  ];
 }
 
 /// TXT chapter recognition regex rules (GitHub Legado-compatible + user imported).
@@ -170,131 +170,157 @@ class AppDatabase extends _$AppDatabase {
   factory AppDatabase.inMemory() => AppDatabase(NativeDatabase.memory());
 
   @override
-  int get schemaVersion => 3;
+  int get schemaVersion => 4;
 
   @override
   MigrationStrategy get migration => MigrationStrategy(
-        onCreate: (m) async {
-          await m.createAll();
-          await _seedDefaultShelves();
+    onCreate: (m) async {
+      await m.createAll();
+      await _seedDefaultShelves();
+      await _seedBuiltinTocRules();
+    },
+    onUpgrade: (m, from, to) async {
+      await transaction(() async {
+        if (from < 2) {
+          await _addColumnIfMissing(m, books, books.isArchived);
+          await _addColumnIfMissing(m, books, books.tocRuleId);
+          await _addColumnIfMissing(m, books, books.forcedEncoding);
+          await _addColumnIfMissing(m, mangas, mangas.isArchived);
+          await _createTableIfMissing(m, tocRules);
+          // Purge any legacy pre-seeded demo entries and orphan annotations/sync states from V1.
+          for (final tbl in const ['annotations', 'sync_states']) {
+            if (await _hasTable(tbl)) {
+              await customStatement(
+                "DELETE FROM $tbl WHERE content_hash LIKE 'demo_%'",
+              );
+            }
+          }
+          await customStatement(
+            "DELETE FROM books WHERE content_hash LIKE 'demo_%' OR file_path LIKE '/demo/%'",
+          );
+          await customStatement(
+            "DELETE FROM manga_chapters WHERE manga_id IN (SELECT id FROM mangas WHERE content_hash LIKE 'demo_%' OR root_path LIKE '/demo/%')",
+          );
+          await customStatement(
+            "DELETE FROM mangas WHERE content_hash LIKE 'demo_%' OR root_path LIKE '/demo/%'",
+          );
           await _seedBuiltinTocRules();
-        },
-        onUpgrade: (m, from, to) async {
-          await transaction(() async {
-            if (from < 2) {
-              await _addColumnIfMissing(m, books, books.isArchived);
-              await _addColumnIfMissing(m, books, books.tocRuleId);
-              await _addColumnIfMissing(m, books, books.forcedEncoding);
-              await _addColumnIfMissing(m, mangas, mangas.isArchived);
-              await _createTableIfMissing(m, tocRules);
-              // Purge any legacy pre-seeded demo entries and orphan annotations/sync states from V1.
-              for (final tbl in const ['annotations', 'sync_states']) {
-                if (await _hasTable(tbl)) {
-                  await customStatement(
-                    "DELETE FROM $tbl WHERE content_hash LIKE 'demo_%'",
-                  );
-                }
-              }
-              await customStatement(
-                "DELETE FROM books WHERE content_hash LIKE 'demo_%' OR file_path LIKE '/demo/%'",
-              );
-              await customStatement(
-                "DELETE FROM manga_chapters WHERE manga_id IN (SELECT id FROM mangas WHERE content_hash LIKE 'demo_%' OR root_path LIKE '/demo/%')",
-              );
-              await customStatement(
-                "DELETE FROM mangas WHERE content_hash LIKE 'demo_%' OR root_path LIKE '/demo/%'",
-              );
-              await _seedBuiltinTocRules();
-            }
-            if (from < 3) {
-              await _addColumnIfMissing(m, books, books.shelfId);
-              await _addColumnIfMissing(m, mangas, mangas.shelfId);
-              await _createTableIfMissing(m, shelves);
-              await _seedDefaultShelves();
-
-              final defBookShelf = await ensureDefaultShelf('book');
-              final defComicShelf = await ensureDefaultShelf('comic');
-
-              // Migrate any V2 shelf_categories rows into Shelves.
-              if (await _hasTable('shelf_categories')) {
-                final legacyCats = await customSelect(
-                  'SELECT name, media_kind FROM shelf_categories ORDER BY sort_order ASC, created_at_ms ASC',
-                ).get();
-                for (final row in legacyCats) {
-                  final rawName = (row.data['name'] as String? ?? '').trim();
-                  final kind =
-                      (row.data['media_kind'] as String? ?? 'book').trim();
-                  if (rawName.isNotEmpty &&
-                      !kDefaultShelfGroups.contains(rawName) &&
-                      rawName != '追更中') {
-                    await createShelf(
-                      rawName,
-                      kind == 'comic' ? 'comic' : 'book',
-                    );
-                  }
-                }
-              }
-
-              // Also migrate any custom non-status shelf_group values on preserved books & mangas into real shelves.
-              final bookGroups = await customSelect(
-                "SELECT DISTINCT TRIM(shelf_group) AS g FROM books WHERE TRIM(shelf_group) NOT IN ('', '所有', '在读', '已读完')",
-              ).get();
-              for (final row in bookGroups) {
-                final g = (row.data['g'] as String? ?? '').trim();
-                if (g.isEmpty) continue;
-                final shelf = await createShelf(g, 'book') ??
-                    (await getShelves('book'))
-                        .where((s) => s.name == g)
-                        .firstOrNull;
-                if (shelf != null) {
-                  await customStatement(
-                    "UPDATE books SET shelf_id = ?, shelf_group = CASE WHEN progress_ratio >= 0.99 THEN '已读完' ELSE '在读' END WHERE TRIM(shelf_group) = ?",
-                    [shelf.id, g],
-                  );
-                }
-              }
-
-              final mangaGroups = await customSelect(
-                "SELECT DISTINCT TRIM(shelf_group) AS g FROM mangas WHERE TRIM(shelf_group) NOT IN ('', '所有', '在读', '已读完', '追更中')",
-              ).get();
-              for (final row in mangaGroups) {
-                final g = (row.data['g'] as String? ?? '').trim();
-                if (g.isEmpty) continue;
-                final shelf = await createShelf(g, 'comic') ??
-                    (await getShelves('comic'))
-                        .where((s) => s.name == g)
-                        .firstOrNull;
-                if (shelf != null) {
-                  await customStatement(
-                    "UPDATE mangas SET shelf_id = ?, shelf_group = '在读' WHERE TRIM(shelf_group) = ?",
-                    [shelf.id, g],
-                  );
-                }
-              }
-
-              // Backfill default shelf IDs and normalize status groups strictly to 在读 / 已读完.
-              await customStatement(
-                'UPDATE books SET shelf_id = ? WHERE shelf_id IS NULL',
-                [defBookShelf.id],
-              );
-              await customStatement(
-                'UPDATE mangas SET shelf_id = ? WHERE shelf_id IS NULL',
-                [defComicShelf.id],
-              );
-              await customStatement(
-                "UPDATE books SET shelf_group = CASE WHEN progress_ratio >= 0.99 OR shelf_group = '已读完' THEN '已读完' ELSE '在读' END WHERE shelf_group NOT IN ('在读', '已读完')",
-              );
-              await customStatement(
-                "UPDATE mangas SET shelf_group = CASE WHEN shelf_group = '已读完' THEN '已读完' ELSE '在读' END WHERE shelf_group NOT IN ('在读', '已读完')",
-              );
-              await customStatement('DROP TABLE IF EXISTS shelf_categories');
-            }
-          });
-        },
-        beforeOpen: (details) async {
+        }
+        if (from < 3) {
+          await _addColumnIfMissing(m, books, books.shelfId);
+          await _addColumnIfMissing(m, mangas, mangas.shelfId);
+          await _createTableIfMissing(m, shelves);
           await _seedDefaultShelves();
-        },
-      );
+
+          final defBookShelf = await ensureDefaultShelf('book');
+          final defComicShelf = await ensureDefaultShelf('comic');
+
+          // Migrate any V2 shelf_categories rows into Shelves.
+          if (await _hasTable('shelf_categories')) {
+            final legacyCats = await customSelect(
+              'SELECT name, media_kind FROM shelf_categories ORDER BY sort_order ASC, created_at_ms ASC',
+            ).get();
+            for (final row in legacyCats) {
+              final rawName = (row.data['name'] as String? ?? '').trim();
+              final kind = (row.data['media_kind'] as String? ?? 'book').trim();
+              if (rawName.isNotEmpty &&
+                  !kDefaultShelfGroups.contains(rawName) &&
+                  rawName != '追更中') {
+                await createShelf(rawName, kind == 'comic' ? 'comic' : 'book');
+              }
+            }
+          }
+
+          // Also migrate any custom non-status shelf_group values on preserved books & mangas into real shelves.
+          final bookGroups = await customSelect(
+            "SELECT DISTINCT TRIM(shelf_group) AS g FROM books WHERE TRIM(shelf_group) NOT IN ('', '所有', '在读', '已读完')",
+          ).get();
+          for (final row in bookGroups) {
+            final g = (row.data['g'] as String? ?? '').trim();
+            if (g.isEmpty) continue;
+            final shelf =
+                await createShelf(g, 'book') ??
+                (await getShelves('book'))
+                    .where((s) => s.name == g)
+                    .firstOrNull;
+            if (shelf != null) {
+              await customStatement(
+                "UPDATE books SET shelf_id = ?, shelf_group = CASE WHEN progress_ratio >= 0.99 THEN '已读完' ELSE '在读' END WHERE TRIM(shelf_group) = ?",
+                [shelf.id, g],
+              );
+            }
+          }
+
+          final mangaGroups = await customSelect(
+            "SELECT DISTINCT TRIM(shelf_group) AS g FROM mangas WHERE TRIM(shelf_group) NOT IN ('', '所有', '在读', '已读完', '追更中')",
+          ).get();
+          for (final row in mangaGroups) {
+            final g = (row.data['g'] as String? ?? '').trim();
+            if (g.isEmpty) continue;
+            final shelf =
+                await createShelf(g, 'comic') ??
+                (await getShelves('comic'))
+                    .where((s) => s.name == g)
+                    .firstOrNull;
+            if (shelf != null) {
+              await customStatement(
+                "UPDATE mangas SET shelf_id = ?, shelf_group = '在读' WHERE TRIM(shelf_group) = ?",
+                [shelf.id, g],
+              );
+            }
+          }
+
+          // Backfill default shelf IDs and normalize status groups strictly to 在读 / 已读完.
+          await customStatement(
+            'UPDATE books SET shelf_id = ? WHERE shelf_id IS NULL',
+            [defBookShelf.id],
+          );
+          await customStatement(
+            'UPDATE mangas SET shelf_id = ? WHERE shelf_id IS NULL',
+            [defComicShelf.id],
+          );
+          await customStatement(
+            "UPDATE books SET shelf_group = CASE WHEN progress_ratio >= 0.99 OR shelf_group = '已读完' THEN '已读完' ELSE '在读' END WHERE shelf_group NOT IN ('在读', '已读完')",
+          );
+          await customStatement(
+            "UPDATE mangas SET shelf_group = CASE WHEN shelf_group = '已读完' THEN '已读完' ELSE '在读' END WHERE shelf_group NOT IN ('在读', '已读完')",
+          );
+          await customStatement('DROP TABLE IF EXISTS shelf_categories');
+        }
+        if (from < 4) {
+          await customStatement('''
+                UPDATE sync_states
+                SET locator = (
+                  SELECT 'idx:' || c.chapter_index ||
+                    substr(sync_states.locator, instr(sync_states.locator, ';page:'))
+                  FROM manga_chapters c
+                  JOIN mangas m ON m.id = c.manga_id
+                  WHERE m.content_hash = sync_states.content_hash
+                    AND 'ch:' || c.id = substr(
+                      sync_states.locator, 1, instr(sync_states.locator, ';page:') - 1
+                    )
+                  LIMIT 1
+                )
+                WHERE media_kind = 'comic' AND locator LIKE 'ch:%;page:%'
+                  AND EXISTS (
+                    SELECT 1
+                    FROM manga_chapters c
+                    JOIN mangas m ON m.id = c.manga_id
+                    WHERE m.content_hash = sync_states.content_hash
+                      AND 'ch:' || c.id = substr(
+                        sync_states.locator, 1, instr(sync_states.locator, ';page:') - 1
+                      )
+                  )
+              ''');
+        }
+      });
+    },
+    beforeOpen: (details) async {
+      await customStatement('PRAGMA foreign_keys = ON');
+      await customStatement('PRAGMA busy_timeout = 5000');
+      await _seedDefaultShelves();
+    },
+  );
 
   Future<bool> _hasTable(String tableName) async {
     final rows = await customSelect(
@@ -369,11 +395,9 @@ class AppDatabase extends _$AppDatabase {
 
   /// Streams ALL imported books (both on-shelf and removed/archived) for Import History.
   Stream<List<Book>> watchBookImportHistory() {
-    return (select(books)
-          ..orderBy([
-            (t) => OrderingTerm.desc(t.addedAtMs),
-          ]))
-        .watch();
+    return (select(
+      books,
+    )..orderBy([(t) => OrderingTerm.desc(t.addedAtMs)])).watch();
   }
 
   Future<List<Book>> getAllBooks({bool includeArchived = false}) {
@@ -387,20 +411,22 @@ class AppDatabase extends _$AppDatabase {
   Future<Book?> findBookById(int id) =>
       (select(books)..where((t) => t.id.equals(id))).getSingleOrNull();
 
-  Future<Book?> findBookByHash(String hash) =>
-      (select(books)..where((t) => t.contentHash.equals(hash)))
-          .getSingleOrNull();
+  Future<Book?> findBookByHash(String hash) => (select(
+    books,
+  )..where((t) => t.contentHash.equals(hash))).getSingleOrNull();
 
   Future<bool> hasMediaReference(String path) async {
-    final book = await (select(books)
-          ..where((row) => row.filePath.equals(path))
-          ..limit(1))
-        .getSingleOrNull();
+    final book =
+        await (select(books)
+              ..where((row) => row.filePath.equals(path))
+              ..limit(1))
+            .getSingleOrNull();
     if (book != null) return true;
-    final manga = await (select(mangas)
-          ..where((row) => row.rootPath.equals(path))
-          ..limit(1))
-        .getSingleOrNull();
+    final manga =
+        await (select(mangas)
+              ..where((row) => row.rootPath.equals(path))
+              ..limit(1))
+            .getSingleOrNull();
     if (manga != null) return true;
     return await (select(mangaChapters)
               ..where((row) => row.sourcePath.equals(path))
@@ -410,9 +436,9 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<int> upsertBook(BooksCompanion entry) => into(books).insert(
-        entry,
-        onConflict: DoUpdate((_) => entry, target: [books.contentHash]),
-      );
+    entry,
+    onConflict: DoUpdate((_) => entry, target: [books.contentHash]),
+  );
 
   Future<void> updateBookProgress({
     required int id,
@@ -421,7 +447,7 @@ class AppDatabase extends _$AppDatabase {
     required String chapterTitle,
     required double progressRatio,
     int readingTimeDeltaSec = 0,
-  }) async {
+  }) => transaction(() async {
     final existing = await findBookById(id);
     if (existing == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -446,11 +472,11 @@ class AppDatabase extends _$AppDatabase {
         deviceName: Platform.operatingSystem,
       ),
     );
-  }
+  });
 
   /// Atomically applies a synced or restored progress record without overwriting
   /// its authoritative timestamp, sync timestamp, or device identity.
-  Future<void> applySyncedBookProgress({
+  Future<void> applySyncedProgress({
     required String contentHash,
     required String mediaKind,
     required String locator,
@@ -475,13 +501,44 @@ class AppDatabase extends _$AppDatabase {
         ),
       );
 
-      if (mediaKind == 'book') {
+      if (mediaKind == 'comic') {
+        final manga = await findMangaByHash(contentHash);
+        if (manga == null) return;
+        final match = RegExp(r'^idx:(\d+);page:(\d+)$').firstMatch(locator);
+        if (match == null) return;
+        final chapterIndex = int.tryParse(match[1]!);
+        final page = int.tryParse(match[2]!);
+        if (chapterIndex == null || page == null) return;
+        final chapter =
+            await (select(mangaChapters)
+                  ..where(
+                    (row) =>
+                        row.mangaId.equals(manga.id) &
+                        row.chapterIndex.equals(chapterIndex),
+                  )
+                  ..limit(1))
+                .getSingleOrNull();
+        if (chapter == null) return;
+        await (update(
+          mangaChapters,
+        )..where((row) => row.id.equals(chapter.id))).write(
+          MangaChaptersCompanion(
+            lastReadPage: Value(page),
+            isRead: Value(chapter.isRead || clamped >= 1),
+            updatedAtMs: Value(updatedAtMs),
+          ),
+        );
+        await _recalculateMangaUnread(manga.id);
+        if (updatedAtMs > manga.lastReadAtMs) {
+          await updateMangaMeta(manga.id, lastReadAtMs: updatedAtMs);
+        }
+      } else if (mediaKind == 'book') {
         final book = await findBookByHash(contentHash);
         if (book != null) {
           final chMatch = RegExp(r'ch:(\d+)').firstMatch(locator);
           final offMatch = RegExp(r'off:(\d+)').firstMatch(locator);
-          final nextCh = int.tryParse(chMatch?.group(1) ?? '') ??
-              book.currentChapterIndex;
+          final nextCh =
+              int.tryParse(chMatch?.group(1) ?? '') ?? book.currentChapterIndex;
           final nextOff =
               int.tryParse(offMatch?.group(1) ?? '') ?? book.currentCharOffset;
           await (update(books)..where((t) => t.id.equals(book.id))).write(
@@ -490,7 +547,9 @@ class AppDatabase extends _$AppDatabase {
               currentCharOffset: Value(nextOff),
               progressRatio: Value(clamped),
               lastReadAtMs: Value(
-                updatedAtMs > book.lastReadAtMs ? updatedAtMs : book.lastReadAtMs,
+                updatedAtMs > book.lastReadAtMs
+                    ? updatedAtMs
+                    : book.lastReadAtMs,
               ),
             ),
           );
@@ -523,31 +582,35 @@ class AppDatabase extends _$AppDatabase {
         title: title != null ? Value(title) : const Value.absent(),
         author: author != null ? Value(author) : const Value.absent(),
         shelfId: shelfId != null ? Value(shelfId) : const Value.absent(),
-        shelfGroup:
-            shelfGroup != null ? Value(shelfGroup) : const Value.absent(),
+        shelfGroup: shelfGroup != null
+            ? Value(shelfGroup)
+            : const Value.absent(),
         isPinned: isPinned != null ? Value(isPinned) : const Value.absent(),
         coverPath: coverPath != null ? Value(coverPath) : const Value.absent(),
         cloudFileSynced: cloudFileSynced != null
             ? Value(cloudFileSynced)
             : const Value.absent(),
-        progressRatio:
-            progressRatio != null ? Value(progressRatio) : const Value.absent(),
+        progressRatio: progressRatio != null
+            ? Value(progressRatio)
+            : const Value.absent(),
         filePath: filePath != null ? Value(filePath) : const Value.absent(),
         currentChapterTitle: currentChapterTitle != null
             ? Value(currentChapterTitle)
             : const Value.absent(),
-        lastReadAtMs:
-            lastReadAtMs != null ? Value(lastReadAtMs) : const Value.absent(),
-        isArchived:
-            isArchived != null ? Value(isArchived) : const Value.absent(),
+        lastReadAtMs: lastReadAtMs != null
+            ? Value(lastReadAtMs)
+            : const Value.absent(),
+        isArchived: isArchived != null
+            ? Value(isArchived)
+            : const Value.absent(),
         tocRuleId: clearTocRuleId
             ? const Value(null)
             : (tocRuleId != null ? Value(tocRuleId) : const Value.absent()),
         forcedEncoding: clearForcedEncoding
             ? const Value(null)
             : (forcedEncoding != null
-                ? Value(forcedEncoding)
-                : const Value.absent()),
+                  ? Value(forcedEncoding)
+                  : const Value.absent()),
       ),
     );
   }
@@ -556,10 +619,7 @@ class AppDatabase extends _$AppDatabase {
   Future<void> archiveBooksByIds(Iterable<int> ids) async {
     if (ids.isEmpty) return;
     await (update(books)..where((t) => t.id.isIn(ids))).write(
-      const BooksCompanion(
-        isArchived: Value(true),
-        isPinned: Value(false),
-      ),
+      const BooksCompanion(isArchived: Value(true), isPinned: Value(false)),
     );
   }
 
@@ -567,10 +627,7 @@ class AppDatabase extends _$AppDatabase {
   Future<void> restoreBookToShelf(int id) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await (update(books)..where((t) => t.id.equals(id))).write(
-      BooksCompanion(
-        isArchived: const Value(false),
-        lastReadAtMs: Value(now),
-      ),
+      BooksCompanion(isArchived: const Value(false), lastReadAtMs: Value(now)),
     );
   }
 
@@ -581,10 +638,12 @@ class AppDatabase extends _$AppDatabase {
     final hashes = targets.map((b) => b.contentHash).toList();
     await transaction(() async {
       if (hashes.isNotEmpty) {
-        await (delete(annotations)..where((t) => t.contentHash.isIn(hashes)))
-            .go();
-        await (delete(syncStates)..where((t) => t.contentHash.isIn(hashes)))
-            .go();
+        await (delete(
+          annotations,
+        )..where((t) => t.contentHash.isIn(hashes))).go();
+        await (delete(
+          syncStates,
+        )..where((t) => t.contentHash.isIn(hashes))).go();
       }
       await (delete(books)..where((t) => t.id.isIn(ids))).go();
     });
@@ -604,11 +663,9 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Stream<List<Manga>> watchMangaImportHistory() {
-    return (select(mangas)
-          ..orderBy([
-            (t) => OrderingTerm.desc(t.addedAtMs),
-          ]))
-        .watch();
+    return (select(
+      mangas,
+    )..orderBy([(t) => OrderingTerm.desc(t.addedAtMs)])).watch();
   }
 
   Future<List<Manga>> getAllMangas({bool includeArchived = false}) {
@@ -622,14 +679,14 @@ class AppDatabase extends _$AppDatabase {
   Future<Manga?> findMangaById(int id) =>
       (select(mangas)..where((t) => t.id.equals(id))).getSingleOrNull();
 
-  Future<Manga?> findMangaByHash(String hash) =>
-      (select(mangas)..where((t) => t.contentHash.equals(hash)))
-          .getSingleOrNull();
+  Future<Manga?> findMangaByHash(String hash) => (select(
+    mangas,
+  )..where((t) => t.contentHash.equals(hash))).getSingleOrNull();
 
   Future<int> upsertManga(MangasCompanion entry) => into(mangas).insert(
-        entry,
-        onConflict: DoUpdate((_) => entry, target: [mangas.contentHash]),
-      );
+    entry,
+    onConflict: DoUpdate((_) => entry, target: [mangas.contentHash]),
+  );
 
   Future<void> updateMangaMeta(
     int id, {
@@ -654,8 +711,9 @@ class AppDatabase extends _$AppDatabase {
         title: title != null ? Value(title) : const Value.absent(),
         author: author != null ? Value(author) : const Value.absent(),
         shelfId: shelfId != null ? Value(shelfId) : const Value.absent(),
-        shelfGroup:
-            shelfGroup != null ? Value(shelfGroup) : const Value.absent(),
+        shelfGroup: shelfGroup != null
+            ? Value(shelfGroup)
+            : const Value.absent(),
         preferredReadingMode: preferredReadingMode != null
             ? Value(preferredReadingMode)
             : const Value.absent(),
@@ -664,19 +722,23 @@ class AppDatabase extends _$AppDatabase {
             ? Value(splitWidePages)
             : const Value.absent(),
         isPinned: isPinned != null ? Value(isPinned) : const Value.absent(),
-        unreadCount:
-            unreadCount != null ? Value(unreadCount) : const Value.absent(),
-        totalChapters:
-            totalChapters != null ? Value(totalChapters) : const Value.absent(),
+        unreadCount: unreadCount != null
+            ? Value(unreadCount)
+            : const Value.absent(),
+        totalChapters: totalChapters != null
+            ? Value(totalChapters)
+            : const Value.absent(),
         coverPath: coverPath != null ? Value(coverPath) : const Value.absent(),
         cloudFileSynced: cloudFileSynced != null
             ? Value(cloudFileSynced)
             : const Value.absent(),
-        lastReadAtMs:
-            lastReadAtMs != null ? Value(lastReadAtMs) : const Value.absent(),
+        lastReadAtMs: lastReadAtMs != null
+            ? Value(lastReadAtMs)
+            : const Value.absent(),
         rootPath: rootPath != null ? Value(rootPath) : const Value.absent(),
-        isArchived:
-            isArchived != null ? Value(isArchived) : const Value.absent(),
+        isArchived: isArchived != null
+            ? Value(isArchived)
+            : const Value.absent(),
       ),
     );
   }
@@ -684,20 +746,14 @@ class AppDatabase extends _$AppDatabase {
   Future<void> archiveMangasByIds(Iterable<int> ids) async {
     if (ids.isEmpty) return;
     await (update(mangas)..where((t) => t.id.isIn(ids))).write(
-      const MangasCompanion(
-        isArchived: Value(true),
-        isPinned: Value(false),
-      ),
+      const MangasCompanion(isArchived: Value(true), isPinned: Value(false)),
     );
   }
 
   Future<void> restoreMangaToShelf(int id) async {
     final now = DateTime.now().millisecondsSinceEpoch;
     await (update(mangas)..where((t) => t.id.equals(id))).write(
-      MangasCompanion(
-        isArchived: const Value(false),
-        lastReadAtMs: Value(now),
-      ),
+      MangasCompanion(isArchived: const Value(false), lastReadAtMs: Value(now)),
     );
   }
 
@@ -707,10 +763,12 @@ class AppDatabase extends _$AppDatabase {
     final hashes = targets.map((m) => m.contentHash).toList();
     await transaction(() async {
       if (hashes.isNotEmpty) {
-        await (delete(annotations)..where((t) => t.contentHash.isIn(hashes)))
-            .go();
-        await (delete(syncStates)..where((t) => t.contentHash.isIn(hashes)))
-            .go();
+        await (delete(
+          annotations,
+        )..where((t) => t.contentHash.isIn(hashes))).go();
+        await (delete(
+          syncStates,
+        )..where((t) => t.contentHash.isIn(hashes))).go();
       }
       await (delete(mangaChapters)..where((t) => t.mangaId.isIn(ids))).go();
       await (delete(mangas)..where((t) => t.id.isIn(ids))).go();
@@ -735,21 +793,24 @@ class AppDatabase extends _$AppDatabase {
   Future<void> replaceMangaChapters(
     int mangaId,
     List<MangaChaptersCompanion> entries,
-  ) async {
-    await transaction(() async {
-      await (delete(mangaChapters)..where((t) => t.mangaId.equals(mangaId)))
-          .go();
-      await batch((b) => b.insertAll(mangaChapters, entries));
-    });
+  ) => transaction(() async {
+    await (delete(mangaChapters)..where((t) => t.mangaId.equals(mangaId))).go();
+    await batch((b) => b.insertAll(mangaChapters, entries));
     await _recalculateMangaUnread(mangaId);
-  }
+  });
 
   Future<void> updateMangaChapterProgress({
     required int mangaId,
     required int chapterId,
     required int lastReadPage,
     required int pageCount,
-  }) async {
+  }) => transaction(() async {
+    final chapter =
+        await (select(mangaChapters)..where(
+              (row) => row.id.equals(chapterId) & row.mangaId.equals(mangaId),
+            ))
+            .getSingleOrNull();
+    if (chapter == null) return;
     final now = DateTime.now().millisecondsSinceEpoch;
     final completed = pageCount > 0 && lastReadPage >= pageCount - 1;
     await (update(mangaChapters)..where((t) => t.id.equals(chapterId))).write(
@@ -768,9 +829,11 @@ class AppDatabase extends _$AppDatabase {
         SyncStatesCompanion.insert(
           contentHash: manga.contentHash,
           mediaKind: 'comic',
-          locator: 'ch:$chapterId;page:$lastReadPage',
+          locator: 'idx:${chapter.chapterIndex};page:$lastReadPage',
           progressRatio: Value(
-            pageCount > 0 ? ((lastReadPage + 1) / pageCount).clamp(0.0, 1.0) : 0,
+            pageCount > 0
+                ? ((lastReadPage + 1) / pageCount).clamp(0.0, 1.0)
+                : 0,
           ),
           updatedAtMs: now,
           deviceId: 'local_device',
@@ -778,16 +841,14 @@ class AppDatabase extends _$AppDatabase {
         ),
       );
     }
-  }
+  });
 
   Future<void> markAllChaptersRead(int mangaId, bool isRead) async {
     final now = DateTime.now().millisecondsSinceEpoch;
-    await (update(mangaChapters)..where((t) => t.mangaId.equals(mangaId)))
-        .write(
-      MangaChaptersCompanion(
-        isRead: Value(isRead),
-        updatedAtMs: Value(now),
-      ),
+    await (update(
+      mangaChapters,
+    )..where((t) => t.mangaId.equals(mangaId))).write(
+      MangaChaptersCompanion(isRead: Value(isRead), updatedAtMs: Value(now)),
     );
     await _recalculateMangaUnread(mangaId);
   }
@@ -844,8 +905,9 @@ class AppDatabase extends _$AppDatabase {
           .write(const ShelvesCompanion(isDefault: Value(true)));
       return existing.first.copyWith(isDefault: true);
     }
-    final fallbackName =
-        mediaKind == 'comic' ? kDefaultMangaShelfName : kDefaultBookShelfName;
+    final fallbackName = mediaKind == 'comic'
+        ? kDefaultMangaShelfName
+        : kDefaultBookShelfName;
     final now = DateTime.now().millisecondsSinceEpoch;
     final id = await into(shelves).insert(
       ShelvesCompanion.insert(
@@ -870,10 +932,11 @@ class AppDatabase extends _$AppDatabase {
     final name = rawName.trim();
     if (name.isEmpty) return null;
     await ensureDefaultShelf(mediaKind);
-    final dup = await (select(shelves)
-          ..where(
-              (t) => t.name.equals(name) & t.mediaKind.equals(mediaKind)))
-        .getSingleOrNull();
+    final dup =
+        await (select(shelves)..where(
+              (t) => t.name.equals(name) & t.mediaKind.equals(mediaKind),
+            ))
+            .getSingleOrNull();
     if (dup != null) return null;
     final cur = await getShelves(mediaKind);
     final now = DateTime.now().millisecondsSinceEpoch;
@@ -896,40 +959,42 @@ class AppDatabase extends _$AppDatabase {
     );
   }
 
-  Future<bool> renameShelf(
-    int id,
-    String rawNewName,
-    String mediaKind,
-  ) async {
+  Future<bool> renameShelf(int id, String rawNewName, String mediaKind) async {
     final newName = rawNewName.trim();
     if (newName.isEmpty) return false;
-    final old = await (select(shelves)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
+    final old = await (select(
+      shelves,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (old == null || old.name == newName) return false;
-    final dup = await (select(shelves)
-          ..where(
-              (t) => t.name.equals(newName) & t.mediaKind.equals(mediaKind)))
-        .getSingleOrNull();
+    final dup =
+        await (select(shelves)..where(
+              (t) => t.name.equals(newName) & t.mediaKind.equals(mediaKind),
+            ))
+            .getSingleOrNull();
     if (dup != null) return false;
-    await (update(shelves)..where((t) => t.id.equals(id)))
-        .write(ShelvesCompanion(name: Value(newName)));
+    await (update(shelves)..where((t) => t.id.equals(id))).write(
+      ShelvesCompanion(name: Value(newName)),
+    );
     return true;
   }
 
   Future<bool> deleteShelf(int id, String mediaKind) async {
-    final target = await (select(shelves)..where((t) => t.id.equals(id)))
-        .getSingleOrNull();
+    final target = await (select(
+      shelves,
+    )..where((t) => t.id.equals(id))).getSingleOrNull();
     if (target == null || target.isDefault) return false;
     final def = await ensureDefaultShelf(mediaKind);
     if (def.id == id) return false;
 
     await transaction(() async {
       if (mediaKind == 'book') {
-        await (update(books)..where((t) => t.shelfId.equals(id)))
-            .write(BooksCompanion(shelfId: Value(def.id)));
+        await (update(books)..where((t) => t.shelfId.equals(id))).write(
+          BooksCompanion(shelfId: Value(def.id)),
+        );
       } else {
-        await (update(mangas)..where((t) => t.shelfId.equals(id)))
-            .write(MangasCompanion(shelfId: Value(def.id)));
+        await (update(mangas)..where((t) => t.shelfId.equals(id))).write(
+          MangasCompanion(shelfId: Value(def.id)),
+        );
       }
       await (delete(shelves)..where((t) => t.id.equals(id))).go();
     });
@@ -938,33 +1003,33 @@ class AppDatabase extends _$AppDatabase {
 
   Future<void> moveBooksToShelf(Iterable<int> ids, int targetShelfId) async {
     if (ids.isEmpty) return;
-    await (update(books)..where((t) => t.id.isIn(ids)))
-        .write(BooksCompanion(shelfId: Value(targetShelfId)));
+    await (update(books)..where((t) => t.id.isIn(ids))).write(
+      BooksCompanion(shelfId: Value(targetShelfId)),
+    );
   }
 
   Future<void> moveMangasToShelf(Iterable<int> ids, int targetShelfId) async {
     if (ids.isEmpty) return;
-    await (update(mangas)..where((t) => t.id.isIn(ids)))
-        .write(MangasCompanion(shelfId: Value(targetShelfId)));
+    await (update(mangas)..where((t) => t.id.isIn(ids))).write(
+      MangasCompanion(shelfId: Value(targetShelfId)),
+    );
   }
 
   // --- TXT TOC Rules CRUD ---
 
   Stream<List<TocRule>> watchTocRules() {
-    return (select(tocRules)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.serialNumber),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
+    return (select(tocRules)..orderBy([
+          (t) => OrderingTerm.asc(t.serialNumber),
+          (t) => OrderingTerm.asc(t.id),
+        ]))
         .watch();
   }
 
   Future<List<TocRule>> getTocRules() {
-    return (select(tocRules)
-          ..orderBy([
-            (t) => OrderingTerm.asc(t.serialNumber),
-            (t) => OrderingTerm.asc(t.id),
-          ]))
+    return (select(tocRules)..orderBy([
+          (t) => OrderingTerm.asc(t.serialNumber),
+          (t) => OrderingTerm.asc(t.id),
+        ]))
         .get();
   }
 
@@ -1054,14 +1119,16 @@ class AppDatabase extends _$AppDatabase {
   }
 
   Future<void> toggleTocRule(int id, bool enabled) async {
-    await (update(tocRules)..where((t) => t.id.equals(id)))
-        .write(TocRulesCompanion(enabled: Value(enabled)));
+    await (update(tocRules)..where((t) => t.id.equals(id))).write(
+      TocRulesCompanion(enabled: Value(enabled)),
+    );
   }
 
   Future<void> deleteTocRule(int id) async {
     await transaction(() async {
-      await (update(books)..where((t) => t.tocRuleId.equals(id)))
-          .write(const BooksCompanion(tocRuleId: Value(null)));
+      await (update(books)..where((t) => t.tocRuleId.equals(id))).write(
+        const BooksCompanion(tocRuleId: Value(null)),
+      );
       await (delete(tocRules)..where((t) => t.id.equals(id))).go();
     });
   }
@@ -1074,8 +1141,10 @@ class AppDatabase extends _$AppDatabase {
 
   Stream<List<Annotation>> watchAnnotationsFor(String contentHash) {
     return (select(annotations)
-          ..where((t) =>
-              t.contentHash.equals(contentHash) & t.isDeleted.equals(false))
+          ..where(
+            (t) =>
+                t.contentHash.equals(contentHash) & t.isDeleted.equals(false),
+          )
           ..orderBy([
             (t) => OrderingTerm.asc(t.chapterIndex),
             (t) => OrderingTerm.desc(t.updatedAtMs),
@@ -1085,8 +1154,10 @@ class AppDatabase extends _$AppDatabase {
 
   Future<List<Annotation>> getAnnotationsFor(String contentHash) {
     return (select(annotations)
-          ..where((t) =>
-              t.contentHash.equals(contentHash) & t.isDeleted.equals(false))
+          ..where(
+            (t) =>
+                t.contentHash.equals(contentHash) & t.isDeleted.equals(false),
+          )
           ..orderBy([
             (t) => OrderingTerm.asc(t.chapterIndex),
             (t) => OrderingTerm.desc(t.updatedAtMs),
@@ -1096,8 +1167,8 @@ class AppDatabase extends _$AppDatabase {
 
   Future<List<Annotation>> getAllAnnotations() => select(annotations).get();
 
-  Future<int> upsertAnnotation(AnnotationsCompanion entry) =>
-      into(annotations).insert(
+  Future<int> upsertAnnotation(AnnotationsCompanion entry) => into(annotations)
+      .insert(
         entry,
         onConflict: DoUpdate((_) => entry, target: [annotations.uuid]),
       );
@@ -1132,15 +1203,29 @@ class AppDatabase extends _$AppDatabase {
 
   Future<List<SyncState>> getAllSyncStates() => select(syncStates).get();
 
-  Future<SyncState?> getSyncState(String contentHash) =>
-      (select(syncStates)..where((t) => t.contentHash.equals(contentHash)))
-          .getSingleOrNull();
+  Future<SyncState?> getSyncState(String contentHash) => (select(
+    syncStates,
+  )..where((t) => t.contentHash.equals(contentHash))).getSingleOrNull();
 
   Future<void> upsertSyncState(SyncStatesCompanion entry) =>
       into(syncStates).insertOnConflictUpdate(entry);
 
-  Future<void> markSyncStateSynced(String contentHash, int syncedAtMs) async {
-    await (update(syncStates)..where((t) => t.contentHash.equals(contentHash)))
+  Future<void> markSyncStateSynced(
+    String contentHash,
+    int syncedAtMs, {
+    int? expectedUpdatedAtMs,
+    String? expectedLocator,
+  }) async {
+    await (update(syncStates)..where((t) {
+          var condition = t.contentHash.equals(contentHash);
+          if (expectedUpdatedAtMs != null) {
+            condition = condition & t.updatedAtMs.equals(expectedUpdatedAtMs);
+          }
+          if (expectedLocator != null) {
+            condition = condition & t.locator.equals(expectedLocator);
+          }
+          return condition;
+        }))
         .write(SyncStatesCompanion(lastSyncedAtMs: Value(syncedAtMs)));
   }
 
@@ -1148,8 +1233,9 @@ class AppDatabase extends _$AppDatabase {
     String contentHash,
     SyncStatesCompanion companion,
   ) async {
-    await (update(syncStates)..where((t) => t.contentHash.equals(contentHash)))
-        .write(companion);
+    await (update(
+      syncStates,
+    )..where((t) => t.contentHash.equals(contentHash))).write(companion);
   }
 }
 
@@ -1157,6 +1243,13 @@ LazyDatabase _openConnection() {
   return LazyDatabase(() async {
     final dir = await getApplicationDocumentsDirectory();
     final file = File(p.join(dir.path, 'inkbox_library.sqlite'));
-    return NativeDatabase.createInBackground(file);
+    return NativeDatabase.createInBackground(
+      file,
+      setup: (db) {
+        db.execute('PRAGMA journal_mode = WAL');
+        db.execute('PRAGMA busy_timeout = 5000');
+        db.execute('PRAGMA foreign_keys = ON');
+      },
+    );
   });
 }

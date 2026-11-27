@@ -5,6 +5,9 @@ import 'package:material_ui/material_ui.dart';
 
 import '../../data/db/app_database.dart';
 import '../../data/ffi/rust_core_bridge.dart';
+import '../../l10n/app_localizations.dart';
+import '../../l10n/app_localizations_en.dart';
+import '../toc_rules/toc_rules_parser.dart';
 import 'book_reader_settings.dart';
 
 class BookPageSlice {
@@ -255,9 +258,11 @@ class BookPaginator {
 /// Loads chapter TOC and chapter text for all V1.0 formats via RustCoreBridge
 /// (with Legado-compatible TXT TOC rules and zero hardcoded demo prose).
 class BookContentLoader {
-  BookContentLoader({this.rustCore});
+  BookContentLoader({this.rustCore, AppLocalizations? l10n})
+      : l10n = l10n ?? AppLocalizationsEn();
 
   final RustCoreBridge? rustCore;
+  final AppLocalizations l10n;
 
   Future<List<BookChapterRef>> loadChapterList(
     Book book, {
@@ -279,8 +284,8 @@ class BookContentLoader {
   }) async {
     final file = File(book.filePath);
     if (!file.existsSync()) {
-      return const LoadedTocResult(
-        chapters: [BookChapterRef(index: 0, title: '本地文件不可用')],
+      return LoadedTocResult(
+        chapters: [BookChapterRef(index: 0, title: l10n.readerLocalFileUnavailable)],
         fileMissing: true,
       );
     }
@@ -295,14 +300,15 @@ class BookContentLoader {
             final m = Map<String, dynamic>.from(e as Map);
             return BookChapterRef(
               index: (m['index'] as num).toInt(),
-              title: m['title'] as String? ?? 'PDF 页',
+              title: m['title'] as String? ??
+                  l10n.chapterLabelShort((m['index'] as num).toInt() + 1),
               href: m['href'] as String? ?? '',
             );
           }).toList(),
         );
       } catch (_) {
-        return const LoadedTocResult(
-          chapters: [BookChapterRef(index: 0, title: 'PDF 正文')],
+        return LoadedTocResult(
+          chapters: [BookChapterRef(index: 0, title: l10n.readerBodyTitle)],
         );
       }
     }
@@ -344,7 +350,7 @@ class BookContentLoader {
               final m = Map<String, dynamic>.from(e as Map);
               return BookChapterRef(
                 index: (m['index'] as num).toInt(),
-                title: m['title'] as String? ?? '正文',
+                title: m['title'] as String? ?? l10n.readerBodyTitle,
                 startByte: (m['start_byte'] as num?)?.toInt() ?? 0,
                 endByte: (m['end_byte'] as num?)?.toInt() ?? 0,
               );
@@ -361,7 +367,7 @@ class BookContentLoader {
               final m = Map<String, dynamic>.from(e as Map);
               return BookChapterRef(
                 index: (m['index'] as num).toInt(),
-                title: m['title'] as String? ?? '正文',
+                title: m['title'] as String? ?? l10n.readerBodyTitle,
                 href: m['href'] as String? ?? '',
               );
             }).toList(),
@@ -374,7 +380,7 @@ class BookContentLoader {
               final m = Map<String, dynamic>.from(e as Map);
               return BookChapterRef(
                 index: (m['index'] as num).toInt(),
-                title: m['title'] as String? ?? '正文',
+                title: m['title'] as String? ?? l10n.readerBodyTitle,
                 href: m['href'] as String? ?? '',
               );
             }).toList(),
@@ -388,7 +394,7 @@ class BookContentLoader {
               final m = Map<String, dynamic>.from(e as Map);
               return BookChapterRef(
                 index: (m['index'] as num).toInt(),
-                title: m['title'] as String? ?? '正文',
+                title: m['title'] as String? ?? l10n.readerBodyTitle,
                 href: m['href'] as String? ?? '',
               );
             }).toList(),
@@ -420,17 +426,6 @@ class BookContentLoader {
         .replaceFirst('\uFEFF', '')
         .replaceAll('\r\n', '\n')
         .replaceAll('\r', '\n');
-  }
-
-  static String _normalizePatternForDart(String pattern) {
-    return pattern
-        .replaceAll('(?i)', '')
-        .replaceAll('(?m)', '')
-        .replaceAllMapped(
-          RegExp(r'\\u\{([0-9a-fA-F]{4})\}'),
-          (m) => r'\u' + m.group(1)!,
-        )
-        .replaceAll(RegExp(r'^[\r\n]+|[\r\n]+$'), '');
   }
 
   static double _scoreDartMatches(
@@ -471,13 +466,7 @@ class BookContentLoader {
 
     for (final rule in candidates) {
       try {
-        final pattern = _normalizePatternForDart(rule.rule);
-        final caseSensitive = !rule.rule.contains('(?i)');
-        final re = RegExp(
-          pattern,
-          multiLine: true,
-          caseSensitive: caseSensitive,
-        );
+        final re = compileTocRuleForDart(rule.rule);
         final hits = re.allMatches(raw).toList();
         if (forcedRule != null) {
           bestMatches = hits;
@@ -521,7 +510,7 @@ class BookContentLoader {
       chapters.add(
         BookChapterRef(
           index: 0,
-          title: '前言',
+          title: l10n.readerPrefaceTitle,
           startByte: 0,
           endByte: bestMatches.first.start,
         ),
@@ -535,7 +524,7 @@ class BookContentLoader {
       chapters.add(
         BookChapterRef(
           index: chapters.length,
-          title: title.isEmpty ? '第 ${chapters.length + 1} 章' : title,
+          title: title.isEmpty ? l10n.chapterLabelShort(chapters.length + 1) : title,
           startByte: start,
           endByte: end,
         ),
@@ -559,7 +548,7 @@ class BookContentLoader {
       return LoadedBookChapter(
         index: chapter.index,
         title: chapter.title,
-        text: '找不到本地书籍文件（可能已被移动或删除）。\n\n路径：${book.filePath}\n\n请前往「导入」中心重新选择或导入该书籍。',
+        text: l10n.readerLocalFileMissing(book.filePath),
       );
     }
 
@@ -615,7 +604,7 @@ class BookContentLoader {
     return LoadedBookChapter(
       index: chapter.index,
       title: chapter.title,
-      text: '当前环境未加载本地解析引擎，无法读取 ${book.format} 格式文件。',
+      text: l10n.readerCoreUnavailable(book.format),
     );
   }
 }

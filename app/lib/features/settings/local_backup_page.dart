@@ -31,24 +31,34 @@ class _LocalBackupPageState extends ConsumerState<LocalBackupPage> {
     );
     final l10n = context.l10n;
     Directory? staging;
+    String? destination;
     try {
       if (!export && !await storage.ensureWorkingDirectory()) return;
-      staging = await (await getTemporaryDirectory()).createTemp(
-        'inkbox-backup-',
-      );
       final stamp = DateTime.now()
           .toIso8601String()
           .replaceAll(':', '-')
           .split('.')
           .first;
-      final file = File(p.join(staging.path, 'InkBox_$stamp.zip'));
+      final name = 'InkBox_$stamp.zip';
+      if (export) {
+        destination = await MethodChannelPlatformBridge.pickLocalBackupExport(
+          name,
+        );
+        if (destination == null) return;
+      }
+      staging = await (await getTemporaryDirectory()).createTemp(
+        'inkbox-backup-',
+      );
+      final file = File(p.join(staging.path, name));
       if (export) await service.exportTo(file);
       final transferred = await MethodChannelPlatformBridge.transferLocalBackup(
         file.path,
         export: export,
+        destination: destination,
       );
       if (!transferred) return;
       if (export) {
+        destination = null;
         _showMessage(l10n.localBackupExported);
       } else {
         final result = await service.importFrom(file);
@@ -56,9 +66,20 @@ class _LocalBackupPageState extends ConsumerState<LocalBackupPage> {
           l10n.localBackupImported(result.books, result.comics, result.skipped),
         );
       }
+    } on FormatException {
+      _showMessage(l10n.localBackupFailed(l10n.errUnsupportedType));
     } catch (error) {
       _showMessage(l10n.localBackupFailed(localizeError(l10n, error)));
     } finally {
+      if (destination != null) {
+        try {
+          await MethodChannelPlatformBridge.cancelLocalBackupExport(
+            destination,
+          );
+        } catch (_) {
+          // Preserve the transfer error if the provider also rejects cleanup.
+        }
+      }
       if (mounted) {
         ref.invalidate(workingDirectoryProvider);
         setState(() => _busy = false);

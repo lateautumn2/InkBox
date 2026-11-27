@@ -38,8 +38,6 @@ class ResponsiveConstrainedBody extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final width = MediaQuery.sizeOf(context).width;
-    if (width <= maxWidth) return child;
     return Align(
       alignment: Alignment.topCenter,
       child: ConstrainedBox(
@@ -60,6 +58,16 @@ class KeyboardInsetPadding extends StatelessWidget {
 
   final bool enabled;
   final Widget child;
+
+  static double remainingBottomPaddingOf(
+    BuildContext context, {
+    required bool enabled,
+  }) {
+    final bottom = MediaQuery.paddingOf(context).bottom;
+    return enabled
+        ? (bottom - MediaQuery.viewInsetsOf(context).bottom).clamp(0.0, bottom)
+        : bottom;
+  }
 
   @override
   Widget build(BuildContext context) {

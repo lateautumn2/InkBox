@@ -754,6 +754,41 @@
       "count": { "type": "int" }
     }
   },
+  "readAloudLabel": "朗读",
+  "webdavDeviceNameLabel": "设备名称",
+  "readerLocalFileUnavailable": "本地文件不可用",
+  "readerBodyTitle": "正文",
+  "readerPrefaceTitle": "前言",
+  "readerLocalFileMissing": "找不到本地书籍文件 {path}。请重新导入。",
+  "@readerLocalFileMissing": {
+    "placeholders": {
+      "path": { "type": "String" }
+    }
+  },
+  "readerCoreUnavailable": "本地解析引擎不可用，无法读取 {format} 格式。",
+  "@readerCoreUnavailable": {
+    "placeholders": {
+      "format": { "type": "String" }
+    }
+  },
+  "tocRulesImported": "已导入 {count} 条目录规则",
+  "@tocRulesImported": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
+  "tocRulesNotFound": "未找到可导入的目录规则",
+  "tocRuleInvalidRegex": "正则表达式无效",
+  "tocRuleEmptyRegex": "请输入正则表达式",
+  "tocRuleMissingName": "请输入规则名称",
+  "tocRuleExampleLabel": "示例",
+  "tocRuleSampleText": "楔子 雪夜\n漫天风雪。\n第一章 黑暗森林\n罗辑抬头望向星空。\n第 2 章 面壁者\n计划正式开始。\nChapter 1 Awakening\nA quiet valley.",
+  "tocRuleTestMatches": "匹配到 {count} 个章节标题",
+  "@tocRuleTestMatches": {
+    "placeholders": {
+      "count": { "type": "int" }
+    }
+  },
   "tapZoneSectionLabel": "翻页点击区域（点击格子可自定义）",
   "tapActionPrev": "上一页",
   "tapActionNext": "下一页",

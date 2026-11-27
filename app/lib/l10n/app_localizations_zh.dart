@@ -1381,6 +1381,60 @@ class AppLocalizationsZh extends AppLocalizations {
   }
 
   @override
+  String get readAloudLabel => '朗读';
+
+  @override
+  String get webdavDeviceNameLabel => '设备名称';
+
+  @override
+  String get readerLocalFileUnavailable => '本地文件不可用';
+
+  @override
+  String get readerBodyTitle => '正文';
+
+  @override
+  String get readerPrefaceTitle => '前言';
+
+  @override
+  String readerLocalFileMissing(String path) {
+    return '找不到本地书籍文件 $path。请重新导入。';
+  }
+
+  @override
+  String readerCoreUnavailable(String format) {
+    return '本地解析引擎不可用，无法读取 $format 格式。';
+  }
+
+  @override
+  String tocRulesImported(int count) {
+    return '已导入 $count 条目录规则';
+  }
+
+  @override
+  String get tocRulesNotFound => '未找到可导入的目录规则';
+
+  @override
+  String get tocRuleInvalidRegex => '正则表达式无效';
+
+  @override
+  String get tocRuleEmptyRegex => '请输入正则表达式';
+
+  @override
+  String get tocRuleMissingName => '请输入规则名称';
+
+  @override
+  String get tocRuleExampleLabel => '示例';
+
+  @override
+  String get tocRuleSampleText =>
+      '楔子 雪夜\n漫天风雪。\n第一章 黑暗森林\n罗辑抬头望向星空。\n第 2 章 面壁者\n计划正式开始。\nChapter 1 Awakening\nA quiet valley.';
+
+  @override
+  String tocRuleTestMatches(int count) {
+    return '匹配到 $count 个章节标题';
+  }
+
+  @override
   String get tapZoneSectionLabel => '翻页点击区域（点击格子可自定义）';
 
   @override

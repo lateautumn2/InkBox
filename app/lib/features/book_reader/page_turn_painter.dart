@@ -1,6 +1,7 @@
 import 'dart:math' as math;
 import 'dart:ui' as ui;
 
+import 'package:flutter/gestures.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'book_reader_settings.dart';
@@ -84,7 +85,7 @@ class PageTurnStage extends StatefulWidget {
   State<PageTurnStage> createState() => _PageTurnStageState();
 }
 
-enum _VerticalDragMode { none, edgeBrightness, bodySwipeUp }
+enum _DragMode { undecided, horizontal, edgeBrightness, bodySwipeUp }
 
 class _PageTurnStageState extends State<PageTurnStage>
     with SingleTickerProviderStateMixin {
@@ -99,8 +100,9 @@ class _PageTurnStageState extends State<PageTurnStage>
   bool _isAnimating = false;
   bool _isCommitting = false;
   int _animToken = 0;
-  _VerticalDragMode _verticalMode = _VerticalDragMode.none;
-  double _verticalAccumDy = 0.0;
+  _DragMode _dragMode = _DragMode.undecided;
+  Offset _panOrigin = Offset.zero;
+  Offset _panDelta = Offset.zero;
 
   @override
   void initState() {
@@ -189,23 +191,22 @@ class _PageTurnStageState extends State<PageTurnStage>
     });
   }
 
-  void _handleDragStart(DragStartDetails d, Size size) {
+  void _handleDragStart(Offset origin, Size size) {
     if (_isCommitting) return;
     _animToken++;
     _anim.stop();
     _isAnimating = false;
     _isDragging = true;
-    _verticalMode = _VerticalDragMode.none;
     final relY = size.height > 0
-        ? (d.localPosition.dy / size.height).clamp(0.06, 0.94)
+        ? (origin.dy / size.height).clamp(0.06, 0.94)
         : 0.62;
     _dragStartY = relY;
     _touchY = relY;
   }
 
-  void _handleDragUpdate(DragUpdateDetails d, Size size) {
+  void _handleDragUpdate(DragUpdateDetails d, Size size, double deltaX) {
     if (!_isDragging || size.width <= 0) return;
-    final rawDelta = d.delta.dx / size.width;
+    final rawDelta = deltaX / size.width;
     var candidate = _dragProgress + rawDelta;
 
     // Gentle rubber-band damping if dragging past the very first or last page of the book
@@ -223,54 +224,89 @@ class _PageTurnStageState extends State<PageTurnStage>
     });
   }
 
-  void _handleVerticalDragStart(DragStartDetails d, Size size) {
-    if (_isDragging || _isCommitting) {
-      _verticalMode = _VerticalDragMode.none;
-      return;
-    }
-    _verticalAccumDy = 0.0;
-    if (widget.enableEdgeVerticalDrag &&
-        d.localPosition.dx <= widget.edgeZoneWidth) {
-      _verticalMode = _VerticalDragMode.edgeBrightness;
-    } else if (widget.onSwipeUpAction != null) {
-      _verticalMode = _VerticalDragMode.bodySwipeUp;
-    } else {
-      _verticalMode = _VerticalDragMode.none;
-    }
+  void _handlePanStart(DragStartDetails details) {
+    _panOrigin = details.localPosition;
+    _panDelta = Offset.zero;
+    _dragMode = _DragMode.undecided;
   }
 
-  void _handleVerticalDragUpdate(DragUpdateDetails d, Size size) {
-    if (_verticalMode == _VerticalDragMode.edgeBrightness) {
-      widget.onEdgeVerticalDragUpdate?.call(d.delta.dy, size.height);
-    } else if (_verticalMode == _VerticalDragMode.bodySwipeUp) {
-      _verticalAccumDy += d.delta.dy;
-    }
-  }
+  void _handlePanUpdate(DragUpdateDetails details, Size size) {
+    if (_isCommitting || size.isEmpty) return;
+    final delta = details.localPosition - _panOrigin;
+    var frameDelta = delta - _panDelta;
+    _panDelta = delta;
 
-  void _handleVerticalDragEnd(DragEndDetails d) {
-    if (_verticalMode == _VerticalDragMode.edgeBrightness) {
-      widget.onEdgeVerticalDragEnd?.call();
-    } else if (_verticalMode == _VerticalDragMode.bodySwipeUp) {
-      if (_verticalAccumDy <= -56.0 || (d.primaryVelocity ?? 0.0) <= -420.0) {
-        widget.onSwipeUpAction?.call();
+    if (_dragMode == _DragMode.undecided) {
+      final insets = MediaQuery.systemGestureInsetsOf(context);
+      final inReadingArea = _panOrigin.dy > insets.top + 24 &&
+          _panOrigin.dy < size.height - insets.bottom - 48;
+      final onBrightnessEdge = _panOrigin.dx >= insets.left &&
+          _panOrigin.dx < insets.left + widget.edgeZoneWidth;
+      final cornerWidth =
+          (size.width * (widget.isDualSpread ? 0.18 : 0.24)).clamp(56.0, 160.0);
+      final nearRight = _panOrigin.dx >= size.width - cornerWidth;
+      final nearLeft = _panOrigin.dx <= cornerWidth;
+      final nearTopOrBottom = _panOrigin.dy < size.height * 0.28 ||
+          _panOrigin.dy > size.height * 0.72;
+      final simulationCorner = widget.mode == PageTurnMode.simulation &&
+          nearTopOrBottom && (nearRight || nearLeft);
+      final diagonallyTurning = simulationCorner &&
+          ((nearRight && delta.dx < 0) || (nearLeft && delta.dx > 0)) &&
+          delta.dx.abs() >= delta.dy.abs() * 0.22;
+
+      if (delta.dx.abs() > delta.dy.abs() || diagonallyTurning) {
+        _dragMode = _DragMode.horizontal;
+        _handleDragStart(_panOrigin, size);
+      } else if (inReadingArea && onBrightnessEdge && widget.enableEdgeVerticalDrag) {
+        _dragMode = _DragMode.edgeBrightness;
+      } else if (inReadingArea &&
+          !onBrightnessEdge &&
+          !simulationCorner &&
+          widget.onSwipeUpAction != null) {
+        _dragMode = _DragMode.bodySwipeUp;
       }
+      frameDelta = delta;
     }
-    _verticalMode = _VerticalDragMode.none;
-    _verticalAccumDy = 0.0;
+
+    switch (_dragMode) {
+      case _DragMode.horizontal:
+        _handleDragUpdate(details, size, frameDelta.dx);
+      case _DragMode.edgeBrightness:
+        widget.onEdgeVerticalDragUpdate?.call(frameDelta.dy, size.height);
+      case _DragMode.bodySwipeUp:
+      case _DragMode.undecided:
+        break;
+    }
   }
 
-  void _handleVerticalDragCancel() {
-    if (_verticalMode == _VerticalDragMode.edgeBrightness) {
+  void _handlePanEnd(DragEndDetails details) {
+    switch (_dragMode) {
+      case _DragMode.horizontal:
+        _handleDragEnd(details);
+      case _DragMode.edgeBrightness:
+        widget.onEdgeVerticalDragEnd?.call();
+      case _DragMode.bodySwipeUp:
+        if (_panDelta.dy <= -56.0 && _panDelta.dx.abs() <= -_panDelta.dy * 0.65) {
+          widget.onSwipeUpAction?.call();
+        }
+      case _DragMode.undecided:
+        break;
+    }
+    _dragMode = _DragMode.undecided;
+  }
+
+  void _handlePanCancel() {
+    if (_dragMode == _DragMode.edgeBrightness) {
       widget.onEdgeVerticalDragEnd?.call();
     }
-    _verticalMode = _VerticalDragMode.none;
-    _verticalAccumDy = 0.0;
+    _dragMode = _DragMode.undecided;
+    _handleDragCancel();
   }
 
   void _handleDragEnd(DragEndDetails d) {
     if (!_isDragging) return;
     _isDragging = false;
-    final vx = d.primaryVelocity ?? 0.0;
+    final vx = d.velocity.pixelsPerSecond.dx;
 
     final wantsNext =
         _dragProgress < -0.14 || (vx < -280 && _dragProgress <= 0.02);
@@ -327,35 +363,13 @@ class _PageTurnStageState extends State<PageTurnStage>
               (d.localPosition.dy / size.height).clamp(0.0, 1.0),
             );
           },
-          onHorizontalDragStart: widget.selectionActive
+          dragStartBehavior: DragStartBehavior.down,
+          onPanStart: widget.selectionActive ? null : _handlePanStart,
+          onPanUpdate: widget.selectionActive
               ? null
-              : (d) => _handleDragStart(d, size),
-          onHorizontalDragUpdate: widget.selectionActive
-              ? null
-              : (d) => _handleDragUpdate(d, size),
-          onHorizontalDragEnd: widget.selectionActive ? null : _handleDragEnd,
-          onHorizontalDragCancel:
-              widget.selectionActive ? null : _handleDragCancel,
-          onVerticalDragStart: widget.selectionActive ||
-                  (!widget.enableEdgeVerticalDrag &&
-                      widget.onSwipeUpAction == null)
-              ? null
-              : (d) => _handleVerticalDragStart(d, size),
-          onVerticalDragUpdate: widget.selectionActive ||
-                  (!widget.enableEdgeVerticalDrag &&
-                      widget.onSwipeUpAction == null)
-              ? null
-              : (d) => _handleVerticalDragUpdate(d, size),
-          onVerticalDragEnd: widget.selectionActive ||
-                  (!widget.enableEdgeVerticalDrag &&
-                      widget.onSwipeUpAction == null)
-              ? null
-              : _handleVerticalDragEnd,
-          onVerticalDragCancel: widget.selectionActive ||
-                  (!widget.enableEdgeVerticalDrag &&
-                      widget.onSwipeUpAction == null)
-              ? null
-              : _handleVerticalDragCancel,
+              : (details) => _handlePanUpdate(details, size),
+          onPanEnd: widget.selectionActive ? null : _handlePanEnd,
+          onPanCancel: widget.selectionActive ? null : _handlePanCancel,
           child: ClipRect(
             child: Stack(
               fit: StackFit.expand,
@@ -507,10 +521,6 @@ class _PageTurnStageState extends State<PageTurnStage>
           ];
         }
 
-        if (widget.isDualSpread && widget.mode == PageTurnMode.simulation) {
-          return _buildDualSpreadSimulation(size, turningNext, absP);
-        }
-
         final underPage = turningNext
             ? (widget.nextPage ?? _fallbackPaper())
             : widget.currentPage;
@@ -546,147 +556,6 @@ class _PageTurnStageState extends State<PageTurnStage>
     }
   }
 
-  List<Widget> _buildDualSpreadSimulation(
-    Size size,
-    bool turningNext,
-    double absP,
-  ) {
-    final incoming = turningNext
-        ? (widget.nextPage ?? _fallbackPaper())
-        : (widget.previousPage ?? _fallbackPaper());
-    final firstHalfOfDrag = absP < 0.5;
-
-    if (turningNext) {
-      if (firstHalfOfDrag) {
-        final foldX = size.width * (1.0 - absP);
-        final geom = _CurlGeometry.compute(
-          size: size,
-          foldX: foldX,
-          pivotY: _touchY,
-          startY: _dragStartY,
-        );
-        return [
-          incoming,
-          ClipPath(
-            clipper: _PageCurlClipper(geom: geom),
-            child: widget.currentPage,
-          ),
-          IgnorePointer(
-            child: CustomPaint(
-              size: size,
-              painter: _PageCurlPainter(
-                geom: geom,
-                paperColor: widget.paperColor,
-              ),
-            ),
-          ),
-        ];
-      }
-
-      final revealX = (size.width * 0.5) * (1.0 - (absP - 0.5) * 2.0);
-      final spineShade = ((1.0 - (absP - 0.5) * 2.0) * 0.16).clamp(0.0, 0.2);
-      return [
-        widget.currentPage,
-        ClipRect(
-          clipper: _HorizontalRectClipper(left: revealX, right: size.width),
-          child: incoming,
-        ),
-        if (revealX > 1)
-          Positioned(
-            left: (revealX - 18).clamp(0.0, size.width),
-            top: 0,
-            bottom: 0,
-            width: 18,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: spineShade),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ];
-    }
-
-    if (firstHalfOfDrag) {
-      final revealX = size.width * absP;
-      final spineShade = (absP * 2.0 * 0.16).clamp(0.0, 0.2);
-      return [
-        incoming,
-        ClipRect(
-          clipper: _HorizontalRectClipper(left: revealX, right: size.width),
-          child: widget.currentPage,
-        ),
-        if (revealX > 1)
-          Positioned(
-            left: (revealX - 18).clamp(0.0, size.width),
-            top: 0,
-            bottom: 0,
-            width: 18,
-            child: IgnorePointer(
-              child: DecoratedBox(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.transparent,
-                      Colors.black.withValues(alpha: spineShade),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ),
-      ];
-    }
-
-    final foldX = size.width * absP;
-    final geom = _CurlGeometry.compute(
-      size: size,
-      foldX: foldX,
-      pivotY: _touchY,
-      startY: _dragStartY,
-    );
-    return [
-      widget.currentPage,
-      ClipPath(
-        clipper: _PageCurlClipper(geom: geom),
-        child: incoming,
-      ),
-      IgnorePointer(
-        child: CustomPaint(
-          size: size,
-          painter: _PageCurlPainter(
-            geom: geom,
-            paperColor: widget.paperColor,
-          ),
-        ),
-      ),
-    ];
-  }
-}
-
-class _HorizontalRectClipper extends CustomClipper<Rect> {
-  const _HorizontalRectClipper({required this.left, required this.right});
-
-  final double left;
-  final double right;
-
-  @override
-  Rect getClip(Size size) => Rect.fromLTRB(
-        left.clamp(0.0, size.width),
-        0,
-        right.clamp(0.0, size.width),
-        size.height,
-      );
-
-  @override
-  bool shouldReclip(_HorizontalRectClipper old) =>
-      old.left != left || old.right != right;
 }
 
 enum _CurlCorner { topRight, middleEdge, bottomRight }

@@ -2578,6 +2578,96 @@ abstract class AppLocalizations {
   /// **'{count} 句'**
   String ttsPrefetchUnit(int count);
 
+  /// No description provided for @readAloudLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'朗读'**
+  String get readAloudLabel;
+
+  /// No description provided for @webdavDeviceNameLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'设备名称'**
+  String get webdavDeviceNameLabel;
+
+  /// No description provided for @readerLocalFileUnavailable.
+  ///
+  /// In zh, this message translates to:
+  /// **'本地文件不可用'**
+  String get readerLocalFileUnavailable;
+
+  /// No description provided for @readerBodyTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'正文'**
+  String get readerBodyTitle;
+
+  /// No description provided for @readerPrefaceTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'前言'**
+  String get readerPrefaceTitle;
+
+  /// No description provided for @readerLocalFileMissing.
+  ///
+  /// In zh, this message translates to:
+  /// **'找不到本地书籍文件 {path}。请重新导入。'**
+  String readerLocalFileMissing(String path);
+
+  /// No description provided for @readerCoreUnavailable.
+  ///
+  /// In zh, this message translates to:
+  /// **'本地解析引擎不可用，无法读取 {format} 格式。'**
+  String readerCoreUnavailable(String format);
+
+  /// No description provided for @tocRulesImported.
+  ///
+  /// In zh, this message translates to:
+  /// **'已导入 {count} 条目录规则'**
+  String tocRulesImported(int count);
+
+  /// No description provided for @tocRulesNotFound.
+  ///
+  /// In zh, this message translates to:
+  /// **'未找到可导入的目录规则'**
+  String get tocRulesNotFound;
+
+  /// No description provided for @tocRuleInvalidRegex.
+  ///
+  /// In zh, this message translates to:
+  /// **'正则表达式无效'**
+  String get tocRuleInvalidRegex;
+
+  /// No description provided for @tocRuleEmptyRegex.
+  ///
+  /// In zh, this message translates to:
+  /// **'请输入正则表达式'**
+  String get tocRuleEmptyRegex;
+
+  /// No description provided for @tocRuleMissingName.
+  ///
+  /// In zh, this message translates to:
+  /// **'请输入规则名称'**
+  String get tocRuleMissingName;
+
+  /// No description provided for @tocRuleExampleLabel.
+  ///
+  /// In zh, this message translates to:
+  /// **'示例'**
+  String get tocRuleExampleLabel;
+
+  /// No description provided for @tocRuleSampleText.
+  ///
+  /// In zh, this message translates to:
+  /// **'楔子 雪夜\n漫天风雪。\n第一章 黑暗森林\n罗辑抬头望向星空。\n第 2 章 面壁者\n计划正式开始。\nChapter 1 Awakening\nA quiet valley.'**
+  String get tocRuleSampleText;
+
+  /// No description provided for @tocRuleTestMatches.
+  ///
+  /// In zh, this message translates to:
+  /// **'匹配到 {count} 个章节标题'**
+  String tocRuleTestMatches(int count);
+
   /// No description provided for @tapZoneSectionLabel.
   ///
   /// In zh, this message translates to:

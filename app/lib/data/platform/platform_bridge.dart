@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter/services.dart';
 
 class PickedDirectory {
@@ -111,15 +113,53 @@ class MethodChannelPlatformBridge implements PlatformBridge {
   static const MethodChannel _channel = MethodChannel('dev.inkbox/platform');
   static const EventChannel _eventsChannel = EventChannel('dev.inkbox/events');
 
-  static Future<bool> transferLocalBackup(String path, {required bool export}) async {
-    return await _channel.invokeMethod<bool>(
-          export ? 'exportLocalBackup' : 'importLocalBackup',
-          {'path': path},
-        ) ??
-        false;
+  static Future<String?> pickLocalBackupExport(String name) async {
+    try {
+      return await _channel.invokeMethod<String>('pickLocalBackupExport', {
+        'name': name,
+      });
+    } on MissingPluginException {
+      return null;
+    }
+  }
+
+  static Future<void> cancelLocalBackupExport(String destination) async {
+    try {
+      await _channel.invokeMethod<void>('cancelLocalBackupExport', {
+        'destination': destination,
+      });
+    } on MissingPluginException {
+      return;
+    }
+  }
+
+  static Future<bool> transferLocalBackup(
+    String path, {
+    required bool export,
+    String? destination,
+  }) async {
+    try {
+      return await _channel.invokeMethod<bool>(
+            export ? 'exportLocalBackup' : 'importLocalBackup',
+            {'path': path, 'destination': ?destination},
+          ) ??
+          false;
+    } on MissingPluginException {
+      return false;
+    }
   }
 
   Stream<PlatformEvent>? _cachedStream;
+
+  Future<PickedDocumentsResult> pickDocumentUris() async {
+    if (!Platform.isAndroid) return pickDocumentsDetailed();
+    try {
+      final paths = await _channel.invokeListMethod<String>('pickDocumentUris');
+      return PickedDocumentsResult(paths: paths ?? const []);
+    } on MissingPluginException {
+      return pickDocumentsDetailed();
+    }
+  }
 
   @override
   Stream<PlatformEvent> get events {
@@ -413,6 +453,8 @@ class MethodChannelPlatformBridge implements PlatformBridge {
       return count ?? 0;
     } on MissingPluginException {
       return 0;
+    } on PlatformException {
+      return 0;
     }
   }
 
@@ -429,6 +471,8 @@ class MethodChannelPlatformBridge implements PlatformBridge {
         'scale': scale,
       });
     } on MissingPluginException {
+      return null;
+    } on PlatformException {
       return null;
     }
   }

@@ -1385,6 +1385,60 @@ class AppLocalizationsEn extends AppLocalizations {
   }
 
   @override
+  String get readAloudLabel => 'Read aloud';
+
+  @override
+  String get webdavDeviceNameLabel => 'Device name';
+
+  @override
+  String get readerLocalFileUnavailable => 'Local file is unavailable';
+
+  @override
+  String get readerBodyTitle => 'Main text';
+
+  @override
+  String get readerPrefaceTitle => 'Preface';
+
+  @override
+  String readerLocalFileMissing(String path) {
+    return 'The local book file $path could not be found. Import it again.';
+  }
+
+  @override
+  String readerCoreUnavailable(String format) {
+    return 'The local parser is unavailable and cannot read $format files.';
+  }
+
+  @override
+  String tocRulesImported(int count) {
+    return 'Imported $count table of contents rules';
+  }
+
+  @override
+  String get tocRulesNotFound => 'No table of contents rules to import';
+
+  @override
+  String get tocRuleInvalidRegex => 'Invalid regular expression';
+
+  @override
+  String get tocRuleEmptyRegex => 'Enter a regular expression';
+
+  @override
+  String get tocRuleMissingName => 'Enter a rule name';
+
+  @override
+  String get tocRuleExampleLabel => 'Example';
+
+  @override
+  String get tocRuleSampleText =>
+      'Prologue The Snow\nIt snowed all night.\nChapter 1 Awakening\nA quiet valley.\nChapter 2 The Crossing\nThe trail led west.';
+
+  @override
+  String tocRuleTestMatches(int count) {
+    return 'Matching chapter titles ($count)';
+  }
+
+  @override
   String get tapZoneSectionLabel => 'Tap zones (tap cells to customize)';
 
   @override

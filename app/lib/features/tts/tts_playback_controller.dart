@@ -36,6 +36,7 @@ class TtsPlaybackController extends ChangeNotifier {
   List<TtsSentenceChunk> _chunks = const [];
   int _chunkIndex = 0;
   int _sessionToken = 0;
+  int _playAttempt = 0;
   bool _excerptOnly = false;
   bool _usingFallbackLocal = false;
   String? _activeUtteranceId;
@@ -219,14 +220,11 @@ class TtsPlaybackController extends ChangeNotifier {
   Future<void> updateRate(double nextRate) async {
     if (_disposed) return;
     _readerSettings = _readerSettings.copyWith(ttsRate: nextRate);
-    if (_status == TtsPlaybackStatus.playing) {
-      if (_useOnline) {
-        // Online clips are always synthesized at 1.0x and sped up in MediaPlayer,
-        // so both active playback and 1.0x prefetched chunks stay valid.
-        await _platform.setAudioSpeed(nextRate);
-      } else {
-        await _playIndex(_chunkIndex, _sessionToken);
-      }
+    if (_useOnline && _hasLoadedAudio) {
+      // The audio remains at 1.0x so the same file can resume at the new rate.
+      await _platform.setAudioSpeed(nextRate);
+    } else if (!_useOnline && _status == TtsPlaybackStatus.playing) {
+      await _playIndex(_chunkIndex, _sessionToken);
     }
     _safeNotify();
   }
@@ -263,6 +261,9 @@ class TtsPlaybackController extends ChangeNotifier {
         idx >= _chunks.length) {
       return false;
     }
+    final attemptId = ++_playAttempt;
+    bool isCurrent() =>
+        !_disposed && token == _sessionToken && attemptId == _playAttempt;
     _chunkIndex = idx;
     _hasLoadedAudio = false;
     final chunk = _chunks[idx];
@@ -277,6 +278,7 @@ class TtsPlaybackController extends ChangeNotifier {
       File? audioFile;
       OnlineTtsException? failure;
       for (var attempt = 0; attempt < 2; attempt++) {
+        if (!isCurrent()) return false;
         try {
           final prefetched = _prefetchFutures.remove(idx);
           if (prefetched != null) {
@@ -286,7 +288,11 @@ class TtsPlaybackController extends ChangeNotifier {
           } else {
             audioFile = await _synthesizeOnline(chunk.text);
           }
-          if (_disposed || token != _sessionToken) return false;
+          if (!isCurrent()) {
+            final path = audioFile?.path;
+            if (path != null) await _onlineClient.cache.deleteEphemeralFile(path);
+            return false;
+          }
           failure = null;
           break;
         } on OnlineTtsException catch (e) {
@@ -302,10 +308,10 @@ class TtsPlaybackController extends ChangeNotifier {
         }
       }
 
-      if (_disposed || token != _sessionToken) return false;
+      if (!isCurrent()) return false;
 
       if (audioFile != null) {
-        final pid = 'audio_${token}_$idx';
+        final pid = 'audio_${token}_${idx}_$attemptId';
         final prevAudio = _activeAudioPath;
         _activePlaybackId = pid;
         _activeUtteranceId = null;
@@ -320,12 +326,12 @@ class TtsPlaybackController extends ChangeNotifier {
         if (prevAudio != null && prevAudio != audioFile.path) {
           _disposeEphemeralPath(prevAudio);
         }
-        if (_disposed) {
+        if (!isCurrent()) {
           if (_activeAudioPath == audioFile.path) _activeAudioPath = null;
           _disposeEphemeralPath(audioFile.path);
           return false;
         }
-        if (started && token == _sessionToken) {
+        if (started) {
           _hasLoadedAudio = true;
           return true;
         }
@@ -347,7 +353,7 @@ class TtsPlaybackController extends ChangeNotifier {
     }
 
     // Local system TTS path (default or fallback)
-    if (_disposed || token != _sessionToken) return false;
+    if (!isCurrent()) return false;
     _status = TtsPlaybackStatus.playing;
     _activePlaybackId = null;
     _safeNotify();
@@ -362,7 +368,7 @@ class TtsPlaybackController extends ChangeNotifier {
         voiceName:
             _readerSettings.ttsVoice.isEmpty ? null : _readerSettings.ttsVoice,
       );
-      if (_disposed || token != _sessionToken) return false;
+      if (!isCurrent()) return false;
       if (uid == null) {
         await stop();
         return false;
@@ -370,7 +376,7 @@ class TtsPlaybackController extends ChangeNotifier {
       _activeUtteranceId = uid;
       return true;
     } catch (_) {
-      if (!_disposed && token == _sessionToken) {
+      if (isCurrent()) {
         await stop();
       }
       return false;
@@ -404,6 +410,17 @@ class TtsPlaybackController extends ChangeNotifier {
 
   void _handlePlatformEvent(PlatformEvent ev) {
     if (_disposed || _status != TtsPlaybackStatus.playing) return;
+
+    if (ev.type == 'audio_pause' || ev.type == 'tts_pause') {
+      final audio = ev.type == 'audio_pause';
+      final activeId = audio ? _activePlaybackId : _activeUtteranceId;
+      final id = ev.payload[audio ? 'playbackId' : 'utteranceId'];
+      if (activeId == null || activeId != id) return;
+      if (!audio) _activeUtteranceId = null;
+      _status = TtsPlaybackStatus.paused;
+      _safeNotify();
+      return;
+    }
 
     if (ev.type == 'tts_done' || ev.type == 'tts_error') {
       final evUid = (ev.payload['utteranceId'] as String? ?? '').trim();
