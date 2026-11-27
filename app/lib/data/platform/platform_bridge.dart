@@ -110,6 +110,14 @@ class MethodChannelPlatformBridge implements PlatformBridge {
   static const MethodChannel _channel = MethodChannel('dev.inkbox/platform');
   static const EventChannel _eventsChannel = EventChannel('dev.inkbox/events');
 
+  static Future<bool> transferLocalBackup(String path, {required bool export}) async {
+    return await _channel.invokeMethod<bool>(
+          export ? 'exportLocalBackup' : 'importLocalBackup',
+          {'path': path},
+        ) ??
+        false;
+  }
+
   Stream<PlatformEvent>? _cachedStream;
 
   @override

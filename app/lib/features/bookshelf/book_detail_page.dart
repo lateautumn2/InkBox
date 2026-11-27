@@ -11,6 +11,7 @@ import '../../core/theme/inkbox_theme.dart';
 import '../../core/widgets/floating_surface.dart';
 import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
+import '../../data/platform/library_storage.dart';
 import '../../data/ffi/rust_core_bridge.dart';
 import '../../data/providers/app_providers.dart';
 import '../book_reader/book_paginator.dart';
@@ -64,11 +65,27 @@ class _BookDetailPageState extends ConsumerState<BookDetailPage> {
         ? tocRules.where((r) => r.id == book.tocRuleId).firstOrNull
         : null;
     final loader = BookContentLoader(rustCore: ref.read(rustCoreProvider));
-    final tocResult = await loader.loadChapterToc(
-      book,
-      tocRules: tocRules,
-      forcedRule: forcedRule,
-    );
+    ReadableMedia? media;
+    if (LibraryStorage.isDocument(book.filePath)) {
+      try {
+        media = await ref.read(libraryStorageProvider).open(
+          book.filePath,
+          extension: book.format,
+        );
+      } catch (_) {
+        // The TOC loader handles unavailable files.
+      }
+    }
+    final LoadedTocResult tocResult;
+    try {
+      tocResult = await loader.loadChapterToc(
+        media == null ? book : book.copyWith(filePath: media.path),
+        tocRules: tocRules,
+        forcedRule: forcedRule,
+      );
+    } finally {
+      await media?.close();
+    }
     if (!mounted) return false;
     setState(() {
       _chapters = tocResult.chapters;
@@ -1079,7 +1096,6 @@ class _FullBookTocSheetState extends State<_FullBookTocSheet> {
               (tokens.isFloatingCard ? 14 : 0) + bottomInset,
             ),
             child: FloatingCard(
-              frosted: true,
               radius: 22,
               padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
               child: SizedBox(

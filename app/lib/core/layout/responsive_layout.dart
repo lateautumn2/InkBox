@@ -49,3 +49,25 @@ class ResponsiveConstrainedBody extends StatelessWidget {
     );
   }
 }
+
+/// Resizes only the shelf that is accepting search input during an IME transition.
+class KeyboardInsetPadding extends StatelessWidget {
+  const KeyboardInsetPadding({
+    super.key,
+    required this.enabled,
+    required this.child,
+  });
+
+  final bool enabled;
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: enabled ? MediaQuery.viewInsetsOf(context).bottom : 0,
+      ),
+      child: child,
+    );
+  }
+}

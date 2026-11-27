@@ -498,7 +498,7 @@ Future<T?> showInkOptionSheet<T>({
   );
 }
 
-/// Modern frosted FloatingCard modal dialog rendered on the root Navigator
+/// FloatingCard modal dialog rendered on the root Navigator
 /// (replaces legacy Material AlertDialog). Any controllers passed in [disposables]
 /// are automatically disposed only after the dialog route exit animation unmounts.
 Future<T?> showInkModal<T>({
@@ -519,11 +519,11 @@ Future<T?> showInkModal<T>({
         disposables: disposables,
         child: Dialog(
           backgroundColor: Colors.transparent,
+          insetAnimationDuration: Duration.zero,
           insetPadding: const EdgeInsets.symmetric(horizontal: 20, vertical: 24),
           child: ConstrainedBox(
             constraints: const BoxConstraints(maxWidth: 460),
             child: FloatingCard(
-              frosted: true,
               radius: 22,
               padding: const EdgeInsets.fromLTRB(18, 18, 18, 16),
             child: SingleChildScrollView(

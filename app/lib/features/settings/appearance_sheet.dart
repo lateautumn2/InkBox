@@ -154,6 +154,14 @@ class _AppearanceSheet extends ConsumerWidget {
                           ),
                         ),
                         _ChoicePill(
+                          label: l10n.themeInkWash,
+                          selected: appearance.themePreference ==
+                              InkBoxThemePreference.inkWash,
+                          onTap: () => ctrl.setThemePreference(
+                            InkBoxThemePreference.inkWash,
+                          ),
+                        ),
+                        _ChoicePill(
                           label: l10n.themeFollowSystem,
                           selected: appearance.themePreference ==
                               InkBoxThemePreference.system,
@@ -191,8 +199,13 @@ class _AppearanceSheet extends ConsumerWidget {
                         ),
                         const SizedBox(width: 12),
                         InkSwitch(
-                          value: appearance.useDynamicColor,
-                          onChanged: ctrl.setUseDynamicColor,
+                          value: appearance.useDynamicColor &&
+                              appearance.themePreference !=
+                                  InkBoxThemePreference.inkWash,
+                          onChanged: appearance.themePreference ==
+                                  InkBoxThemePreference.inkWash
+                              ? null
+                              : ctrl.setUseDynamicColor,
                         ),
                       ],
                     ),

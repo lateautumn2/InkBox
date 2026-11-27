@@ -17,6 +17,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.provider.DocumentsContract
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.security.keystore.KeyGenParameterSpec
@@ -51,8 +52,18 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     private val reqPickDocuments = 9001
     private val reqPickDirectory = 9002
     private val reqPickDocumentsDetailed = 9003
+    private val reqExportBackup = 9004
+    private val reqImportBackup = 9005
+    private val reqWorkingDirectory = 9006
+    private val libraryStorage by lazy { LibraryStorage(applicationContext) }
 
-    private var pendingResult: MethodChannel.Result? = null
+    private data class PendingPicker(
+        val code: Int,
+        val result: MethodChannel.Result,
+        val backupFile: File?
+    )
+
+    private var pendingPicker: PendingPicker? = null
     private var eventSink: EventChannel.EventSink? = null
     private var volumeKeyPagingEnabled = false
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -194,6 +205,46 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, methodChannelName)
             .setMethodCallHandler { call, result ->
                 when (call.method) {
+                    "workingDirectory" -> runLibraryTask(result) {
+                        libraryStorage.workingDirectory()
+                    }
+
+                    "pickWorkingDirectory" -> {
+                        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
+                            addFlags(
+                                Intent.FLAG_GRANT_READ_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
+                                    Intent.FLAG_GRANT_PREFIX_URI_PERMISSION
+                            )
+                        }
+                        launchPicker(intent, reqWorkingDirectory, result)
+                    }
+
+                    "storeLibraryPath", "openLibraryDocument", "libraryDocumentExists",
+                    "deleteLibraryDocument", "releaseMediaTemp" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrBlank()) {
+                            result.error("ARG", "Missing media path", null)
+                            return@setMethodCallHandler
+                        }
+                        runLibraryTask(result) {
+                            when (call.method) {
+                                "storeLibraryPath" -> libraryStorage.store(path)
+                                "openLibraryDocument" -> libraryStorage.open(
+                                    Uri.parse(path),
+                                    call.argument<String>("extension")
+                                )
+                                "libraryDocumentExists" -> libraryStorage.exists(Uri.parse(path))
+                                "deleteLibraryDocument" -> libraryStorage.delete(Uri.parse(path))
+                                else -> {
+                                    libraryStorage.release(path)
+                                    null
+                                }
+                            }
+                        }
+                    }
+
                     "setKeepScreenOn" -> {
                         val enabled = call.argument<Boolean>("enabled") ?: false
                         if (enabled) {
@@ -219,11 +270,6 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                     }
 
                     "pickDocuments", "pickDocumentsDetailed" -> {
-                        if (pendingResult != null) {
-                            result.error("BUSY", "Another picker is already active", null)
-                            return@setMethodCallHandler
-                        }
-                        pendingResult = result
                         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
@@ -235,22 +281,48 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                         } else {
                             reqPickDocuments
                         }
-                        startActivityForResult(intent, code)
+                        launchPicker(intent, code, result)
                     }
 
                     "pickPersistentDirectory" -> {
-                        if (pendingResult != null) {
-                            result.error("BUSY", "Another picker is already active", null)
-                            return@setMethodCallHandler
-                        }
-                        pendingResult = result
                         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).apply {
                             addFlags(
                                 Intent.FLAG_GRANT_READ_URI_PERMISSION or
                                     Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
                             )
                         }
-                        startActivityForResult(intent, reqPickDirectory)
+                        launchPicker(intent, reqPickDirectory, result)
+                    }
+
+                    "exportLocalBackup", "importLocalBackup" -> {
+                        val path = call.argument<String>("path")
+                        if (path.isNullOrBlank()) {
+                            result.error("ARG", "Missing backup path", null)
+                            return@setMethodCallHandler
+                        }
+                        val exporting = call.method == "exportLocalBackup"
+                        val intent = Intent(
+                            if (exporting) Intent.ACTION_CREATE_DOCUMENT else Intent.ACTION_OPEN_DOCUMENT
+                        ).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = if (exporting) "application/zip" else "*/*"
+                            if (exporting) {
+                                addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+                                putExtra(Intent.EXTRA_TITLE, File(path).name)
+                            } else {
+                                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                                putExtra(
+                                    Intent.EXTRA_MIME_TYPES,
+                                    arrayOf("application/zip", "application/x-zip-compressed", "application/octet-stream")
+                                )
+                            }
+                        }
+                        launchPicker(
+                            intent,
+                            if (exporting) reqExportBackup else reqImportBackup,
+                            result,
+                            File(path)
+                        )
                     }
 
                     "scanPersistentDirectory" -> {
@@ -260,8 +332,18 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             return@setMethodCallHandler
                         }
                         Thread {
-                            val items = scanTreeUri(Uri.parse(treeUriStr))
-                            mainHandler.post { result.success(items) }
+                            try {
+                                val treeUri = Uri.parse(treeUriStr)
+                                if (contentResolver.persistedUriPermissions.none {
+                                        it.uri == treeUri && it.isReadPermission
+                                    }) {
+                                    throw SecurityException("Folder access expired")
+                                }
+                                val items = scanTreeUri(treeUri)
+                                mainHandler.post { result.success(items) }
+                            } catch (error: Exception) {
+                                mainHandler.post { result.error("SCAN", error.message, null) }
+                            }
                         }.start()
                     }
 
@@ -273,7 +355,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             return@setMethodCallHandler
                         }
                         Thread {
-                            val outcome = copyUriToManagedLibrary(Uri.parse(uriStr), fileNameHint)
+                            val outcome = stageDocument(Uri.parse(uriStr), fileNameHint)
                             mainHandler.post {
                                 if (outcome.file != null) {
                                     result.success(outcome.file.absolutePath)
@@ -742,11 +824,31 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
         return super.dispatchKeyEvent(event)
     }
 
+    private fun launchPicker(
+        intent: Intent,
+        code: Int,
+        result: MethodChannel.Result,
+        backupFile: File? = null
+    ) {
+        if (pendingPicker != null) {
+            result.error("BUSY", "Another picker is already active", null)
+            return
+        }
+        pendingPicker = PendingPicker(code, result, backupFile)
+        try {
+            startActivityForResult(intent, code)
+        } catch (error: Exception) {
+            pendingPicker = null
+            result.error("PICKER", error.message, null)
+        }
+    }
+
     @Deprecated("Deprecated in Java")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        val callback = pendingResult ?: return
-        pendingResult = null
+        val picker = pendingPicker?.takeIf { it.code == requestCode } ?: return
+        val callback = picker.result
+        pendingPicker = null
 
         if (resultCode != Activity.RESULT_OK || data == null) {
             when (requestCode) {
@@ -754,6 +856,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                 reqPickDocumentsDetailed -> callback.success(
                     mapOf("paths" to emptyList<String>(), "errors" to emptyList<String>())
                 )
+                reqExportBackup, reqImportBackup -> callback.success(false)
                 else -> callback.success(null)
             }
             return
@@ -775,7 +878,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                     val paths = mutableListOf<String>()
                     val errors = mutableListOf<String>()
                     for (uri in uris) {
-                        val outcome = copyUriToManagedLibrary(uri, null)
+                        val outcome = stageDocument(uri, null)
                         if (outcome.file != null) {
                             paths.add(outcome.file.absolutePath)
                         } else {
@@ -800,8 +903,9 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                             treeUri,
                             Intent.FLAG_GRANT_READ_URI_PERMISSION
                         )
-                    } catch (_: SecurityException) {
-                        // Persistable flag not always granted on legacy providers
+                    } catch (error: SecurityException) {
+                        callback.error("SCAN", error.message, null)
+                        return
                     }
                     val doc = DocumentFile.fromTreeUri(this, treeUri)
                     callback.success(
@@ -814,23 +918,77 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                     callback.success(null)
                 }
             }
+
+            reqWorkingDirectory -> {
+                val uri = data.data
+                if (uri == null) {
+                    callback.success(null)
+                } else {
+                    runLibraryTask(callback) { libraryStorage.selectWorkingDirectory(uri, data.flags) }
+                }
+            }
+
+            reqExportBackup, reqImportBackup -> {
+                val uri = data.data
+                val backupFile = picker.backupFile
+                if (uri == null || backupFile == null) {
+                    callback.success(false)
+                    return
+                }
+                transferBackup(uri, backupFile, requestCode == reqExportBackup, callback)
+            }
         }
     }
 
-    private data class StagedCopyResult(val file: File?, val error: String? = null)
-
-    private fun stageAndEmitIncomingFile(uri: Uri) {
+    private fun transferBackup(uri: Uri, file: File, exporting: Boolean, result: MethodChannel.Result) {
         Thread {
-            val outcome = copyUriToManagedLibrary(uri, null)
-            if (outcome.file != null) {
-                emitEvent("open_file", mapOf("path" to outcome.file.absolutePath, "name" to outcome.file.name))
+            try {
+                if (exporting) {
+                    file.inputStream().use { input ->
+                        val output = contentResolver.openOutputStream(uri, "w")
+                            ?: error("Could not open the backup destination")
+                        output.use { input.copyTo(it, 64 * 1024) }
+                    }
+                } else {
+                    val input = contentResolver.openInputStream(uri)
+                        ?: error("Could not open the backup file")
+                    input.use { stream ->
+                        file.outputStream().use { stream.copyTo(it, 64 * 1024) }
+                    }
+                }
+                mainHandler.post { result.success(true) }
+            } catch (error: Exception) {
+                if (exporting) {
+                    runCatching { DocumentsContract.deleteDocument(contentResolver, uri) }
+                }
+                mainHandler.post { result.error("BACKUP_IO", error.message, null) }
             }
         }.start()
     }
 
-    private fun copyUriToManagedLibrary(uri: Uri, nameHint: String?): StagedCopyResult {
-        val importDir = File(filesDir, "library_imports").apply { mkdirs() }
-        val tmpFile = File(importDir, ".staging_${UUID.randomUUID()}.tmp")
+    private data class StagedCopyResult(val file: File?, val error: String? = null)
+
+    private fun runLibraryTask(result: MethodChannel.Result, task: () -> Any?) {
+        Thread {
+            try {
+                val value = task()
+                mainHandler.post { result.success(value) }
+            } catch (error: Exception) {
+                mainHandler.post { result.error("LIBRARY_IO", error.message, null) }
+            }
+        }.start()
+    }
+
+    private fun stageAndEmitIncomingFile(uri: Uri) {
+        emitEvent("open_file", mapOf("uri" to uri.toString()))
+    }
+
+    private fun stageDocument(uri: Uri, nameHint: String?): StagedCopyResult {
+        val staging = runCatching { libraryStorage.temporaryDirectory() }.getOrElse {
+            return StagedCopyResult(null, it.message)
+        }
+        val tmpFile = File(staging, ".staging")
+        var success = false
         return try {
             val rawName = sequenceOf(nameHint, queryDisplayName(uri))
                 .mapNotNull { it?.trim() }
@@ -887,24 +1045,20 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
                 }
             }
 
-            // Avoid clobbering an existing managed file with the same display name
-            var target = File(importDir, safeName)
-            if (target.exists()) {
-                val dot = safeName.lastIndexOf('.')
-                val stem = if (dot > 0) safeName.substring(0, dot) else safeName
-                val extPart = if (dot > 0) safeName.substring(dot) else ""
-                val uniqueTag = UUID.randomUUID().toString().substring(0, 6)
-                target = File(importDir, "${stem}_$uniqueTag$extPart")
+            if (safeName.isEmpty() || safeName == "." || safeName == ".." || safeName == ".staging") {
+                safeName = "import_${System.currentTimeMillis()}"
             }
-
+            val target = File(staging, safeName)
             if (!tmpFile.renameTo(target)) {
-                tmpFile.copyTo(target, overwrite = true)
+                tmpFile.copyTo(target)
                 tmpFile.delete()
             }
+            success = true
             StagedCopyResult(target)
         } catch (e: Exception) {
-            tmpFile.delete()
             StagedCopyResult(null, "文件复制失败: ${e.message ?: e.javaClass.simpleName}")
+        } finally {
+            if (!success) staging.deleteRecursively()
         }
     }
 
@@ -999,7 +1153,9 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     }
 
     private fun scanTreeUri(treeUri: Uri): List<Map<String, Any>> {
-        val root = DocumentFile.fromTreeUri(this, treeUri) ?: return emptyList()
+        val root = DocumentFile.fromTreeUri(this, treeUri)
+            ?.takeIf { it.isDirectory && it.canRead() }
+            ?: error("Could not read the selected folder")
         val allowed = setOf("epub", "txt", "pdf", "mobi", "azw3", "fb2", "md", "cbz", "zip", "cbr", "rar", "cb7", "7z")
         val results = mutableListOf<Map<String, Any>>()
 

@@ -22,7 +22,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get navImport => '导入';
 
   @override
-  String get navMe => '我的';
+  String get navMe => '设置';
 
   @override
   String get cancel => '取消';
@@ -557,7 +557,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get shelfExampleManga => '例如：连载、完结';
 
   @override
-  String get mineTitle => '我的';
+  String get mineTitle => '设置';
 
   @override
   String get appearanceSettings => '外观与主题';
@@ -689,7 +689,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get pickLocalFiles => '选择本地文件';
 
   @override
-  String get addAndScanFolder => '扫描本地目录';
+  String get addAndScanFolder => '选择并扫描目录';
 
   @override
   String get importOptions => '导入选项';
@@ -726,8 +726,7 @@ class AppLocalizationsZh extends AppLocalizations {
   String get historyOnShelf => '在架';
 
   @override
-  String get noImportHistory =>
-      '暂无导入历史，支持 EPUB / TXT / PDF / MOBI / AZW3 / FB2 / MD / CBZ / CB7';
+  String get noImportHistory => '暂无导入记录';
 
   @override
   String get noMatchingHistory => '当前筛选下无记录';
@@ -1700,4 +1699,59 @@ class AppLocalizationsZh extends AppLocalizations {
 
   @override
   String get errUnknown => '操作失败';
+
+  @override
+  String get androidImportStorageHint => '书籍和漫画会复制到工作目录。可以选择任意有权访问的目录扫描文件。';
+
+  @override
+  String folderScanFailed(String error) {
+    return '扫描失败：$error';
+  }
+
+  @override
+  String get historyBooks => '书籍';
+
+  @override
+  String get historyComics => '漫画';
+
+  @override
+  String get themeInkWash => '水墨';
+
+  @override
+  String get localBackupTitle => '本地备份';
+
+  @override
+  String get localBackupSummary => '导出或导入书库 ZIP';
+
+  @override
+  String get localBackupDescription =>
+      '备份包含可用的书籍和漫画文件、书架、导入历史、阅读进度、书签、笔记和目录规则。导入时会合并书库并跳过已有作品。';
+
+  @override
+  String get localBackupExport => '导出备份';
+
+  @override
+  String get localBackupImport => '导入备份';
+
+  @override
+  String get localBackupExported => '本地备份已导出';
+
+  @override
+  String localBackupImported(int books, int comics, int skipped) {
+    return '已恢复 $books 本书籍、$comics 部漫画，跳过 $skipped 个重复项';
+  }
+
+  @override
+  String localBackupFailed(String error) {
+    return '备份操作失败：$error';
+  }
+
+  @override
+  String get workingDirectoryTitle => '工作目录';
+
+  @override
+  String get workingDirectoryChoose => '选择存放书籍和漫画的目录';
+
+  @override
+  String get errWorkDirectory => '请重新选择一个可读写的工作目录';
 }

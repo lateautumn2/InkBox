@@ -1,3 +1,5 @@
+import 'dart:io';
+
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -12,13 +14,11 @@ import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
 import '../../data/providers/app_providers.dart';
 import '../book_reader/book_reader_settings.dart';
-import '../bookshelf/shelf_sheets.dart';
 import '../settings/appearance_sheet.dart';
 import '../tts/tts_models.dart';
 import '../webdav_sync/webdav_sync_service.dart';
 
-/// "Me" Hub tab hosting library stats, Appearance & Language,
-/// Multi-Shelves, TTS Voice Settings, TXT TOC Rules, and WebDAV Sync.
+/// App settings and reading statistics.
 class MinePage extends ConsumerStatefulWidget {
   const MinePage({super.key});
 
@@ -65,6 +65,7 @@ class _MinePageState extends ConsumerState<MinePage> {
       InkBoxThemePreference.crispLight => l10n.themeCrispLight,
       InkBoxThemePreference.darkTheater => l10n.themeDarkTheater,
       InkBoxThemePreference.oledBlack => l10n.themeOledBlack,
+      InkBoxThemePreference.inkWash => l10n.themeInkWash,
       InkBoxThemePreference.system => l10n.themeFollowSystem,
     };
     return '$color · $style';
@@ -98,10 +99,6 @@ class _MinePageState extends ConsumerState<MinePage> {
         ref.watch(bookHistoryStreamProvider).valueOrNull ?? const <Book>[];
     final tocRules =
         ref.watch(tocRulesStreamProvider).valueOrNull ?? const <TocRule>[];
-    final bookShelves =
-        ref.watch(bookShelvesStreamProvider).valueOrNull ?? const <Shelf>[];
-    final mangaShelves =
-        ref.watch(mangaShelvesStreamProvider).valueOrNull ?? const <Shelf>[];
     final readerSettings = ref.watch(bookReaderSettingsProvider);
     final ttsConfig = ref.watch(ttsConfigProvider);
     final appearance = ref.watch(appearanceProvider);
@@ -209,20 +206,6 @@ class _MinePageState extends ConsumerState<MinePage> {
                     child: Column(
                       children: [
                         _MineMenuTile(
-                          icon: InkIcon.bookshelf,
-                          title: l10n.multiShelfManagerMenu,
-                          subtitle: l10n.multiShelfSummary(
-                            bookShelves.isEmpty ? 1 : bookShelves.length,
-                            mangaShelves.isEmpty ? 1 : mangaShelves.length,
-                          ),
-                          onTap: () => showDualShelfManagerSheet(context),
-                        ),
-                        Divider(
-                          height: 1,
-                          indent: 54,
-                          color: tokens.subtleBorder,
-                        ),
-                        _MineMenuTile(
                           icon: InkIcon.tts,
                           title: l10n.ttsMenuTitle,
                           subtitle: ttsSubtitle,
@@ -258,6 +241,19 @@ class _MinePageState extends ConsumerState<MinePage> {
                             await _loadWebDavSummary();
                           },
                         ),
+                        if (Platform.isAndroid) ...[
+                          Divider(
+                            height: 1,
+                            indent: 54,
+                            color: tokens.subtleBorder,
+                          ),
+                          _MineMenuTile(
+                            icon: InkIcon.file,
+                            title: l10n.localBackupTitle,
+                            subtitle: l10n.localBackupSummary,
+                            onTap: () => context.push('/mine/local-backup'),
+                          ),
+                        ],
                       ],
                     ),
                   ),

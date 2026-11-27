@@ -1,6 +1,4 @@
-﻿import 'dart:ui';
-
-import 'package:go_router/go_router.dart';
+﻿import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import '../../features/book_reader/book_reader_page.dart';
@@ -11,6 +9,7 @@ import '../../features/manga_reader/manga_reader_page.dart';
 import '../../features/mangashelf/manga_detail_page.dart';
 import '../../features/mangashelf/manga_shelf_page.dart';
 import '../../features/mine/mine_page.dart';
+import '../../features/settings/local_backup_page.dart';
 import '../../features/settings/tts_settings_page.dart';
 import '../../features/toc_rules/toc_rules_page.dart';
 import '../../features/webdav_sync/webdav_sync_page.dart';
@@ -63,6 +62,11 @@ final GoRouter appRouter = GoRouter(
           ],
         ),
       ],
+    ),
+    GoRoute(
+      parentNavigatorKey: rootNavigatorKey,
+      path: '/mine/local-backup',
+      builder: (context, state) => const LocalBackupPage(),
     ),
     GoRoute(
       parentNavigatorKey: rootNavigatorKey,
@@ -140,6 +144,7 @@ class AppShellScaffold extends StatelessWidget {
   final StatefulNavigationShell navigationShell;
 
   void _onSelectTab(int index) {
+    FocusManager.instance.primaryFocus?.unfocus();
     navigationShell.goBranch(
       index,
       initialLocation: index == navigationShell.currentIndex,
@@ -152,7 +157,7 @@ class AppShellScaffold extends StatelessWidget {
       _NavItemSpec(l10n.navBooks, InkIcon.bookshelf),
       _NavItemSpec(l10n.navManga, InkIcon.manga),
       _NavItemSpec(l10n.navImport, InkIcon.importTray),
-      _NavItemSpec(l10n.navMe, InkIcon.user),
+      _NavItemSpec(l10n.navMe, InkIcon.gear),
     ];
   }
 
@@ -163,6 +168,7 @@ class AppShellScaffold extends StatelessWidget {
 
     if (isWideLayout(context)) {
       return Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: tokens.canvasBg,
         body: Row(
           children: [
@@ -179,10 +185,12 @@ class AppShellScaffold extends StatelessWidget {
 
     if (tokens.isFloatingCard) {
       return Scaffold(
+        resizeToAvoidBottomInset: false,
         backgroundColor: tokens.canvasBg,
         extendBody: true,
         body: navigationShell,
         bottomNavigationBar: SafeArea(
+          maintainBottomViewPadding: true,
           top: false,
           child: Padding(
             padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
@@ -197,6 +205,7 @@ class AppShellScaffold extends StatelessWidget {
     }
 
     return Scaffold(
+      resizeToAvoidBottomInset: false,
       backgroundColor: tokens.canvasBg,
       body: navigationShell,
       bottomNavigationBar: Container(
@@ -205,6 +214,7 @@ class AppShellScaffold extends StatelessWidget {
           border: Border(top: BorderSide(color: tokens.subtleBorder)),
         ),
         child: SafeArea(
+          maintainBottomViewPadding: true,
           top: false,
           child: SizedBox(
             height: 60,
@@ -335,16 +345,13 @@ class _AdaptiveSideRail extends StatelessWidget {
             ),
             child: ClipRRect(
               borderRadius: BorderRadius.circular(tokens.dockRadius),
-              child: BackdropFilter(
-                filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: tokens.glassSurface,
-                    borderRadius: BorderRadius.circular(tokens.dockRadius),
-                    border: Border.all(color: tokens.subtleBorder, width: 1),
-                  ),
-                  child: railContent,
+              child: Container(
+                decoration: BoxDecoration(
+                  color: tokens.cardSurface,
+                  borderRadius: BorderRadius.circular(tokens.dockRadius),
+                  border: Border.all(color: tokens.subtleBorder, width: 1),
                 ),
+                child: railContent,
               ),
             ),
           ),
@@ -384,62 +391,59 @@ class _FloatingBottomPillDock extends StatelessWidget {
       ),
       child: ClipRRect(
         borderRadius: BorderRadius.circular(999),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(sigmaX: 16, sigmaY: 16),
-          child: Container(
-            height: 58,
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
-            decoration: BoxDecoration(
-              color: tokens.glassSurface,
-              borderRadius: BorderRadius.circular(999),
-              border: Border.all(color: tokens.subtleBorder, width: 1),
-            ),
-            child: Row(
-              children: List.generate(items.length, (i) {
-                final item = items[i];
-                final active = currentIndex == i;
-                return Expanded(
-                  child: GestureDetector(
-                    behavior: HitTestBehavior.opaque,
-                    onTap: () => onSelect(i),
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 200),
-                      curve: Curves.easeOutCubic,
-                      padding: const EdgeInsets.symmetric(vertical: 4),
-                      decoration: BoxDecoration(
-                        color: active ? tokens.accentSoft : Colors.transparent,
-                        borderRadius: BorderRadius.circular(999),
-                      ),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          InkIconWidget(
-                            item.icon,
-                            size: 19,
+        child: Container(
+          height: 58,
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 5),
+          decoration: BoxDecoration(
+            color: tokens.cardSurface,
+            borderRadius: BorderRadius.circular(999),
+            border: Border.all(color: tokens.subtleBorder, width: 1),
+          ),
+          child: Row(
+            children: List.generate(items.length, (i) {
+              final item = items[i];
+              final active = currentIndex == i;
+              return Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () => onSelect(i),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOutCubic,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: BoxDecoration(
+                      color: active ? tokens.accentSoft : Colors.transparent,
+                      borderRadius: BorderRadius.circular(999),
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        InkIconWidget(
+                          item.icon,
+                          size: 19,
+                          color: active
+                              ? tokens.accentPrimary
+                              : tokens.inkMuted,
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          item.label,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            fontWeight:
+                                active ? FontWeight.w600 : FontWeight.w500,
                             color: active
                                 ? tokens.accentPrimary
                                 : tokens.inkMuted,
                           ),
-                          const SizedBox(height: 2),
-                          Text(
-                            item.label,
-                            style: TextStyle(
-                              fontSize: 10.5,
-                              fontWeight:
-                                  active ? FontWeight.w600 : FontWeight.w500,
-                              color: active
-                                  ? tokens.accentPrimary
-                                  : tokens.inkMuted,
-                            ),
-                          ),
-                        ],
-                      ),
+                        ),
+                      ],
                     ),
                   ),
-                );
-              }),
-            ),
+                ),
+              );
+            }),
           ),
         ),
       ),

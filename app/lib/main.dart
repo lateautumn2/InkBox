@@ -44,22 +44,33 @@ class _InkBoxAppState extends ConsumerState<InkBoxApp> {
   void _listenIncomingOpenFiles() {
     try {
       _openFileSub = ref.read(platformBridgeProvider).events.listen((ev) async {
-        if (ev.type == 'open_file') {
-          final path = ev.payload['path'] as String?;
-          if (path != null && path.isNotEmpty) {
-            try {
-              final outcome = await ref
-                  .read(importServiceProvider)
-                  .importLocalPathDetailed(path);
-              if (outcome.id != null) {
-                if (outcome.kind == 'comic') {
-                  appRouter.push('/manga/${outcome.id}');
-                } else {
-                  appRouter.push('/reader/book/${outcome.id}');
-                }
-              }
-            } catch (_) {}
+        if (ev.type != 'open_file' || !mounted) return;
+        final uri = ev.payload['uri'] as String?;
+        final storage = ref.read(libraryStorageProvider);
+        final platform = ref.read(platformBridgeProvider);
+        final importer = ref.read(importServiceProvider);
+        String? path;
+        try {
+          if (!await storage.ensureWorkingDirectory() || !mounted) return;
+          ref.invalidate(workingDirectoryProvider);
+          path = uri == null
+              ? ev.payload['path'] as String?
+              : await platform.stageDocumentUri(uri);
+          if (path == null || path.isEmpty) return;
+          final outcome = await importer.importLocalPathDetailed(path);
+          if (!mounted || outcome.id == null) return;
+          appRouter.push(outcome.kind == 'comic'
+              ? '/manga/${outcome.id}'
+              : '/reader/book/${outcome.id}');
+        } catch (error) {
+          final context = rootNavigatorKey.currentContext;
+          if (context != null && context.mounted) {
+            ScaffoldMessenger.maybeOf(context)?.showSnackBar(
+              SnackBar(content: Text(localizeError(context.l10n, error))),
+            );
           }
+        } finally {
+          if (path != null) await storage.releaseTemp(path);
         }
       });
     } catch (_) {
@@ -81,6 +92,8 @@ class _InkBoxAppState extends ConsumerState<InkBoxApp> {
       builder: (lightDynamic, darkDynamic) {
         final lightTheme = InkBoxTheme.light(
           uiStyle: appearance.uiStyle,
+          inkWash:
+              appearance.themePreference == InkBoxThemePreference.inkWash,
           dynamicSeedColor:
               appearance.useDynamicColor ? lightDynamic?.primary : null,
         );

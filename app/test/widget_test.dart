@@ -211,11 +211,11 @@ void main() {
       );
       await tester.pumpAndSettle();
 
-      // 4 tabs: 书架, 漫画, 导入, 我的 (no 同步 tab)
+      // 4 tabs: 书架, 漫画, 导入, 设置 (no 同步 tab)
       expect(find.text('书架'), findsWidgets);
       expect(find.text('漫画'), findsWidgets);
       expect(find.text('导入'), findsWidgets);
-      expect(find.text('我的'), findsWidgets);
+      expect(find.text('设置'), findsWidgets);
       expect(find.text('同步'), findsNothing);
       expect(find.byType(InkIconWidget), findsWidgets);
 
@@ -262,10 +262,10 @@ void main() {
       expect(find.textContaining('特性：'), findsNothing);
       expect(find.byTooltip('主题预设'), findsNothing);
 
-      // Switch to Mine tab -> Multi-Shelf manager, TTS Settings, TOC Rules, WebDAV Sync, Appearance & Language
-      await tester.tap(find.text('我的').last);
+      // Settings offers TTS, TOC rules, WebDAV, and appearance.
+      await tester.tap(find.text('设置').last);
       await tester.pumpAndSettle();
-      expect(find.text('多书架管理'), findsOneWidget);
+      expect(find.text('多书架管理'), findsNothing);
       expect(find.text('TTS 语音朗读'), findsOneWidget);
       expect(find.text('WebDAV 同步'), findsOneWidget);
       expect(find.text('TXT 目录规则'), findsOneWidget);

@@ -12,6 +12,7 @@ enum InkBoxThemePreference {
   darkTheater,
   oledBlack,
   system,
+  inkWash,
 }
 
 /// Built-in 5 paper palettes for the book reader engine.
@@ -50,6 +51,13 @@ enum BookPaperTheme {
     foreground: Color(0xFFADB3BE),
     secondary: Color(0xFF5E6572),
     highlight: Color(0xFF2C3B4D),
+  ),
+  inkWash(
+    label: '水墨',
+    background: Color(0xFFF3EEE2),
+    foreground: Color(0xFF2C2C25),
+    secondary: Color(0xFF686658),
+    highlight: Color(0xFFE9C2AF),
   );
 
   const BookPaperTheme({
@@ -186,19 +194,23 @@ class InkBoxTheme {
   static ThemeData light({
     required InkBoxUiStyle uiStyle,
     Color? dynamicSeedColor,
+    bool inkWash = false,
   }) {
     final isFloating = uiStyle == InkBoxUiStyle.floatingCard;
-    final dynamicScheme = dynamicSeedColor != null
+    final dynamicScheme = !inkWash && dynamicSeedColor != null
         ? ColorScheme.fromSeed(
             seedColor: dynamicSeedColor,
             brightness: Brightness.light,
           )
         : null;
-    final accent = dynamicScheme?.primary ?? slateInkLight;
-    final accentSoft =
-        dynamicScheme?.primaryContainer ?? const Color(0xFFE3ECF6);
+    final accent = inkWash
+        ? const Color(0xFF455B51)
+        : dynamicScheme?.primary ?? slateInkLight;
+    final accentSoft = inkWash
+        ? const Color(0xFFDEE5D8)
+        : dynamicScheme?.primaryContainer ?? const Color(0xFFE3ECF6);
 
-    final tokens = InkBoxTokens(
+    final baseTokens = InkBoxTokens(
       canvasBg: isFloating ? const Color(0xFFF4F5F7) : const Color(0xFFFAFAFB),
       cardSurface: const Color(0xFFFFFFFF),
       glassSurface: const Color(0xEBFFFFFF),
@@ -242,15 +254,28 @@ class InkBoxTheme {
       ],
       uiStyle: uiStyle,
     );
+    final tokens = inkWash
+        ? baseTokens.copyWith(
+            canvasBg: const Color(0xFFF3EEE2),
+            cardSurface: const Color(0xFFFFFBF1),
+            glassSurface: const Color(0xF5FFFBF1),
+            surfaceVariant: const Color(0xFFEBE4D5),
+            subtleBorder: const Color(0xFFDCD3C2),
+            inkPrimary: const Color(0xFF2C2C25),
+            inkMuted: const Color(0xFF686658),
+            accentWarm: const Color(0xFFA44739),
+            statusOk: const Color(0xFF4B654E),
+          )
+        : baseTokens;
 
     final colorScheme = (dynamicScheme ??
             ColorScheme.fromSeed(
-              seedColor: slateInkLight,
+              seedColor: accent,
               brightness: Brightness.light,
             ))
         .copyWith(
       primary: accent,
-      secondary: vermilionLight,
+      secondary: tokens.accentWarm,
       surface: tokens.cardSurface,
       surfaceContainerLowest: tokens.canvasBg,
       onSurface: tokens.inkPrimary,

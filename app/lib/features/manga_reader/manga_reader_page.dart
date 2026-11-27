@@ -83,6 +83,7 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
   MangaReadingMode _mode = MangaReadingMode.rtl;
 
   MangaPageSource? _source;
+  int _chapterRequest = 0;
   bool _loading = true;
   int _currentPage = 0;
   bool _controlsVisible = false;
@@ -161,8 +162,10 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
 
   Future<void> _openChapter(int idx) async {
     if (_manga == null) return;
+    final request = ++_chapterRequest;
     setState(() => _loading = true);
     await _source?.dispose();
+    if (!mounted || request != _chapterRequest) return;
 
     final clamped =
         _chapters.isEmpty ? 0 : idx.clamp(0, _chapters.length - 1);
@@ -173,11 +176,20 @@ class _MangaReaderPageState extends ConsumerState<MangaReaderPage> {
 
     final src = MangaPageSource(
       sourcePath: sourcePath,
+      format: _manga!.format,
+      storage: ref.read(libraryStorageProvider),
       rustCore: ref.read(rustCoreProvider),
       platform: ref.read(platformBridgeProvider),
     );
-    await src.open();
-    if (!mounted) return;
+    try {
+      await src.open();
+    } catch (_) {
+      await src.dispose();
+    }
+    if (!mounted || request != _chapterRequest) {
+      await src.dispose();
+      return;
+    }
 
     final startPage =
         src.pageCount > 0 ? resumePage.clamp(0, src.pageCount - 1) : 0;

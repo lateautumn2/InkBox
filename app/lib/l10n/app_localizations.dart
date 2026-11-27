@@ -127,7 +127,7 @@ abstract class AppLocalizations {
   /// No description provided for @navMe.
   ///
   /// In zh, this message translates to:
-  /// **'我的'**
+  /// **'设置'**
   String get navMe;
 
   /// No description provided for @cancel.
@@ -1069,7 +1069,7 @@ abstract class AppLocalizations {
   /// No description provided for @mineTitle.
   ///
   /// In zh, this message translates to:
-  /// **'我的'**
+  /// **'设置'**
   String get mineTitle;
 
   /// No description provided for @appearanceSettings.
@@ -1309,7 +1309,7 @@ abstract class AppLocalizations {
   /// No description provided for @addAndScanFolder.
   ///
   /// In zh, this message translates to:
-  /// **'扫描本地目录'**
+  /// **'选择并扫描目录'**
   String get addAndScanFolder;
 
   /// No description provided for @importOptions.
@@ -1375,7 +1375,7 @@ abstract class AppLocalizations {
   /// No description provided for @noImportHistory.
   ///
   /// In zh, this message translates to:
-  /// **'暂无导入历史，支持 EPUB / TXT / PDF / MOBI / AZW3 / FB2 / MD / CBZ / CB7'**
+  /// **'暂无导入记录'**
   String get noImportHistory;
 
   /// No description provided for @noMatchingHistory.
@@ -3171,6 +3171,102 @@ abstract class AppLocalizations {
   /// In zh, this message translates to:
   /// **'操作失败'**
   String get errUnknown;
+
+  /// No description provided for @androidImportStorageHint.
+  ///
+  /// In zh, this message translates to:
+  /// **'书籍和漫画会复制到工作目录。可以选择任意有权访问的目录扫描文件。'**
+  String get androidImportStorageHint;
+
+  /// No description provided for @folderScanFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'扫描失败：{error}'**
+  String folderScanFailed(String error);
+
+  /// No description provided for @historyBooks.
+  ///
+  /// In zh, this message translates to:
+  /// **'书籍'**
+  String get historyBooks;
+
+  /// No description provided for @historyComics.
+  ///
+  /// In zh, this message translates to:
+  /// **'漫画'**
+  String get historyComics;
+
+  /// No description provided for @themeInkWash.
+  ///
+  /// In zh, this message translates to:
+  /// **'水墨'**
+  String get themeInkWash;
+
+  /// No description provided for @localBackupTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'本地备份'**
+  String get localBackupTitle;
+
+  /// No description provided for @localBackupSummary.
+  ///
+  /// In zh, this message translates to:
+  /// **'导出或导入书库 ZIP'**
+  String get localBackupSummary;
+
+  /// No description provided for @localBackupDescription.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份包含可用的书籍和漫画文件、书架、导入历史、阅读进度、书签、笔记和目录规则。导入时会合并书库并跳过已有作品。'**
+  String get localBackupDescription;
+
+  /// No description provided for @localBackupExport.
+  ///
+  /// In zh, this message translates to:
+  /// **'导出备份'**
+  String get localBackupExport;
+
+  /// No description provided for @localBackupImport.
+  ///
+  /// In zh, this message translates to:
+  /// **'导入备份'**
+  String get localBackupImport;
+
+  /// No description provided for @localBackupExported.
+  ///
+  /// In zh, this message translates to:
+  /// **'本地备份已导出'**
+  String get localBackupExported;
+
+  /// No description provided for @localBackupImported.
+  ///
+  /// In zh, this message translates to:
+  /// **'已恢复 {books} 本书籍、{comics} 部漫画，跳过 {skipped} 个重复项'**
+  String localBackupImported(int books, int comics, int skipped);
+
+  /// No description provided for @localBackupFailed.
+  ///
+  /// In zh, this message translates to:
+  /// **'备份操作失败：{error}'**
+  String localBackupFailed(String error);
+
+  /// No description provided for @workingDirectoryTitle.
+  ///
+  /// In zh, this message translates to:
+  /// **'工作目录'**
+  String get workingDirectoryTitle;
+
+  /// No description provided for @workingDirectoryChoose.
+  ///
+  /// In zh, this message translates to:
+  /// **'选择存放书籍和漫画的目录'**
+  String get workingDirectoryChoose;
+
+  /// No description provided for @errWorkDirectory.
+  ///
+  /// In zh, this message translates to:
+  /// **'请重新选择一个可读写的工作目录'**
+  String get errWorkDirectory;
 }
 
 class _AppLocalizationsDelegate

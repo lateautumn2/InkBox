@@ -21,6 +21,7 @@ class AppearanceState {
   ThemeMode get themeMode {
     switch (themePreference) {
       case InkBoxThemePreference.crispLight:
+      case InkBoxThemePreference.inkWash:
         return ThemeMode.light;
       case InkBoxThemePreference.darkTheater:
       case InkBoxThemePreference.oledBlack:
@@ -121,6 +122,7 @@ class AppearanceController extends Notifier<AppearanceState> {
       InkBoxThemePreference.crispLight,
       InkBoxThemePreference.darkTheater,
       InkBoxThemePreference.oledBlack,
+      InkBoxThemePreference.inkWash,
     ];
     final cur = order.indexOf(state.themePreference);
     final next = order[(cur + 1) % order.length];

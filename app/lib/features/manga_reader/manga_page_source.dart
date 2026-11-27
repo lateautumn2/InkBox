@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:path/path.dart' as p;
 
 import '../../data/ffi/rust_core_bridge.dart';
+import '../../data/platform/library_storage.dart';
 import '../../data/platform/platform_bridge.dart';
 
 class MangaPageDescriptor {
@@ -43,38 +44,57 @@ class MangaPageSource {
     required this.sourcePath,
     this.rustCore,
     this.platform,
+    this.format,
+    LibraryStorage? storage,
     this.maxCachedPages = 8,
-  });
+  }) : storage = storage ?? LibraryStorage();
 
   final String sourcePath;
   final RustCoreBridge? rustCore;
   final PlatformBridge? platform;
+  final String? format;
+  final LibraryStorage storage;
   final int maxCachedPages;
 
   final LinkedHashMap<int, DecodedMangaPage> _cache = LinkedHashMap();
+  final _pdfReads = <Future<List<int>?>>{};
   List<MangaPageDescriptor> _pages = const [];
+  ReadableMedia? _media;
+  bool _closed = false;
+
+  String get _path => _media?.path ?? sourcePath;
 
   List<MangaPageDescriptor> get pages => _pages;
   int get pageCount => _pages.length;
 
   Future<void> open() async {
-    final isDir = FileSystemEntity.isDirectorySync(sourcePath);
-    final isFile = FileSystemEntity.isFileSync(sourcePath);
+    if (LibraryStorage.isDocument(sourcePath)) {
+      try {
+        _media = await storage.open(
+          sourcePath,
+          extension: format == 'FOLDER' ? null : format,
+        );
+      } catch (_) {
+        return;
+      }
+    }
+    final isDir = FileSystemEntity.isDirectorySync(_path);
+    final isFile = FileSystemEntity.isFileSync(_path);
 
     if (!isDir && !isFile) {
       _pages = const [];
       return;
     }
 
-    final ext = p.extension(sourcePath).replaceFirst('.', '').toLowerCase();
+    final ext = p.extension(_path).replaceFirst('.', '').toLowerCase();
     if (!isDir && ext == 'pdf') {
       var count = 0;
       if (platform != null) {
-        count = await platform!.getPdfPageCount(sourcePath);
+        count = await platform!.getPdfPageCount(_path);
       }
       if (count == 0 && rustCore != null) {
         try {
-          final meta = rustCore!.parsePdfMetadata(sourcePath);
+          final meta = rustCore!.parsePdfMetadata(_path);
           count = (meta['page_count'] as num?)?.toInt() ?? 0;
         } catch (_) {}
       }
@@ -90,7 +110,7 @@ class MangaPageSource {
     }
 
     if (rustCore != null) {
-      final summary = rustCore!.inspectComicArchive(sourcePath);
+      final summary = rustCore!.inspectComicArchive(_path);
       final raw = summary['pages'] as List<dynamic>? ?? const [];
       _pages = raw.map((e) {
         final m = Map<String, dynamic>.from(e as Map);
@@ -103,7 +123,7 @@ class MangaPageSource {
     }
 
     if (isDir) {
-      final files = Directory(sourcePath)
+      final files = Directory(_path)
           .listSync()
           .whereType<File>()
           .where((f) {
@@ -124,7 +144,7 @@ class MangaPageSource {
     int index, {
     required bool computeCrop,
   }) async {
-    if (index < 0 || index >= _pages.length) return null;
+    if (_closed || index < 0 || index >= _pages.length) return null;
     if (_cache.containsKey(index)) {
       final hit = _cache.remove(index)!;
       _cache[index] = hit;
@@ -135,8 +155,14 @@ class MangaPageSource {
 
     DecodedMangaPage? decoded;
     if (desc.isPdf && platform != null) {
-      final bytes =
-          await platform!.renderPdfPage(sourcePath, index, scale: 2.0);
+      final read = platform!.renderPdfPage(_path, index, scale: 2.0);
+      _pdfReads.add(read);
+      final List<int>? bytes;
+      try {
+        bytes = await read;
+      } finally {
+        _pdfReads.remove(read);
+      }
       if (bytes != null) {
         decoded = DecodedMangaPage(
           index: index,
@@ -149,7 +175,7 @@ class MangaPageSource {
       }
     } else if (rustCore != null) {
       final res = rustCore!.readComicPage(
-        archivePath: sourcePath,
+        archivePath: _path,
         entryName: desc.entryName,
         computeCrop: computeCrop,
       );
@@ -173,7 +199,7 @@ class MangaPageSource {
       );
     }
 
-    if (decoded != null) {
+    if (decoded != null && !_closed) {
       _cache[index] = decoded;
       while (_cache.length > maxCachedPages) {
         _cache.remove(_cache.keys.first);
@@ -192,6 +218,10 @@ class MangaPageSource {
   }
 
   Future<void> dispose() async {
+    if (_closed) return;
+    _closed = true;
     _cache.clear();
+    await Future.wait(_pdfReads.toList().map((read) => read.catchError((_) => null)));
+    await _media?.close();
   }
 }

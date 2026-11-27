@@ -344,7 +344,7 @@ void main() {
       await tester.pumpAndSettle();
 
       expect(find.text('书架'), findsWidgets);
-      expect(find.text('我的'), findsWidgets);
+      expect(find.text('设置'), findsWidgets);
 
       final container = ProviderScope.containerOf(
         tester.element(find.byType(AppShellScaffold)),
@@ -355,7 +355,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('Books'), findsWidgets);
       expect(find.text('Manga'), findsWidgets);
-      expect(find.text('Me'), findsWidgets);
+      expect(find.text('Settings'), findsWidgets);
 
       await tester.runAsync(
         () => container.read(appearanceProvider.notifier).setAppLocaleCode('ja'),
@@ -363,7 +363,7 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.text('本棚'), findsWidgets);
       expect(find.text('マンガ'), findsWidgets);
-      expect(find.text('マイ'), findsWidgets);
+      expect(find.text('設定'), findsWidgets);
 
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 1));

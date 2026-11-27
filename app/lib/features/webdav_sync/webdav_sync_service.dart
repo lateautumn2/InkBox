@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import '../../data/db/app_database.dart';
 import '../../data/ffi/rust_core_bridge.dart';
+import '../../data/platform/library_storage.dart';
 import 'webdav_client.dart';
 
 class WebDavConfig {
@@ -464,19 +465,29 @@ class WebDavSyncService {
       // --- Layer 2: Deduplicated On-Demand Source File Upload ---
       if (cfg.syncFiles) {
         final maxBytes = cfg.maxFileMb * 1024 * 1024;
+        final storage = LibraryStorage();
         for (final book in books) {
           if (book.cloudFileSynced) continue;
-          final f = File(book.filePath);
-          if (!f.existsSync()) continue;
-          if (f.lengthSync() > maxBytes) continue;
-          final ext = p.extension(book.filePath).replaceFirst('.', '').toLowerCase();
-          final remotePath =
-              '$root/library_files/${book.contentHash}.${ext.isEmpty ? "bin" : ext}';
-          if (!await client.exists(remotePath)) {
-            await client.putFile(remotePath, f);
-            filesUploaded++;
+          ReadableMedia media;
+          try {
+            media = await storage.open(book.filePath, extension: book.format);
+          } catch (_) {
+            continue;
           }
-          await db.updateBookMeta(book.id, cloudFileSynced: true);
+          try {
+            final f = File(media.path);
+            if (!await f.exists() || await f.length() > maxBytes) continue;
+            final ext = p.extension(media.path).replaceFirst('.', '').toLowerCase();
+            final remotePath =
+                '$root/library_files/${book.contentHash}.${ext.isEmpty ? "bin" : ext}';
+            if (!await client.exists(remotePath)) {
+              await client.putFile(remotePath, f);
+              filesUploaded++;
+            }
+            await db.updateBookMeta(book.id, cloudFileSynced: true);
+          } finally {
+            await media.close();
+          }
         }
       }
     } finally {

@@ -22,7 +22,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get navImport => '取込';
 
   @override
-  String get navMe => 'マイ';
+  String get navMe => '設定';
 
   @override
   String get cancel => 'キャンセル';
@@ -557,7 +557,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get shelfExampleManga => '例：連載中、完結';
 
   @override
-  String get mineTitle => 'マイ';
+  String get mineTitle => '設定';
 
   @override
   String get appearanceSettings => '外観とテーマ';
@@ -689,7 +689,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get pickLocalFiles => 'ファイルを選択';
 
   @override
-  String get addAndScanFolder => 'フォルダをスキャン';
+  String get addAndScanFolder => 'フォルダを選んでスキャン';
 
   @override
   String get importOptions => '取込オプション';
@@ -726,8 +726,7 @@ class AppLocalizationsJa extends AppLocalizations {
   String get historyOnShelf => '棚に保存中';
 
   @override
-  String get noImportHistory =>
-      '取込履歴はありません。EPUB / TXT / PDF / MOBI / AZW3 / FB2 / MD / CBZ / CB7 対応';
+  String get noImportHistory => '取り込み履歴はありません';
 
   @override
   String get noMatchingHistory => '該当する履歴がありません';
@@ -1700,4 +1699,60 @@ class AppLocalizationsJa extends AppLocalizations {
 
   @override
   String get errUnknown => '処理に失敗しました';
+
+  @override
+  String get androidImportStorageHint =>
+      '書籍と漫画は作業フォルダにコピーされます。アクセスを許可した任意のフォルダをスキャンできます。';
+
+  @override
+  String folderScanFailed(String error) {
+    return 'フォルダのスキャンに失敗しました：$error';
+  }
+
+  @override
+  String get historyBooks => '書籍';
+
+  @override
+  String get historyComics => '漫画';
+
+  @override
+  String get themeInkWash => '水墨';
+
+  @override
+  String get localBackupTitle => 'ローカルバックアップ';
+
+  @override
+  String get localBackupSummary => 'ライブラリの ZIP を書き出し・取り込み';
+
+  @override
+  String get localBackupDescription =>
+      '利用可能な書籍・漫画ファイル、本棚、取り込み履歴、読書の進捗、しおり、メモ、目次ルールをバックアップします。取り込み時にライブラリを統合し、登録済みの書籍や漫画はスキップします。';
+
+  @override
+  String get localBackupExport => 'バックアップを書き出す';
+
+  @override
+  String get localBackupImport => 'バックアップを取り込む';
+
+  @override
+  String get localBackupExported => 'バックアップを書き出しました';
+
+  @override
+  String localBackupImported(int books, int comics, int skipped) {
+    return '書籍 $books 冊と漫画 $comics 作品を復元し、重複 $skipped 件をスキップしました';
+  }
+
+  @override
+  String localBackupFailed(String error) {
+    return 'バックアップ操作に失敗しました：$error';
+  }
+
+  @override
+  String get workingDirectoryTitle => '作業フォルダ';
+
+  @override
+  String get workingDirectoryChoose => '書籍と漫画の保存先を選択';
+
+  @override
+  String get errWorkDirectory => '読み書きが可能な作業フォルダを選択してください';
 }

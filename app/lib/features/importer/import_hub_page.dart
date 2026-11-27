@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+﻿import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
@@ -12,6 +12,7 @@ import '../../core/widgets/floating_surface.dart';
 import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
 import '../../data/ffi/rust_core_bridge.dart';
+import '../../data/platform/library_storage.dart';
 import '../../data/providers/app_providers.dart';
 import 'import_service.dart';
 
@@ -28,11 +29,43 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
   bool _busy = false;
   bool _foldersExpanded = false;
   String _selectedFormat = 'all';
+  bool _showComicHistory = false;
   String _historyFilter = 'all'; // 'all' | 'archived' | 'on_shelf'
   List<ImportCandidate> _candidates = [];
   ImportBatchResult? _lastResult;
 
   static const _formats = ['all', 'EPUB', 'TXT', 'PDF', 'MOBI', 'comic'];
+
+  void _clearResult() {
+    for (final item in _lastResult?.duplicateItems ?? const <ImportFileOutcome>[]) {
+      unawaited(LibraryStorage().releaseTemp(item.localPath));
+    }
+    _lastResult = null;
+  }
+
+  @override
+  void dispose() {
+    _clearResult();
+    super.dispose();
+  }
+
+  Future<void> _chooseWorkingDirectory() async {
+    if (_busy) return;
+    setState(() => _busy = true);
+    try {
+      await ref.read(libraryStorageProvider).pickWorkingDirectory();
+    } catch (error) {
+      if (mounted) _showError(localizeError(context.l10n, error));
+    } finally {
+      _finishLibraryOperation();
+    }
+  }
+
+  void _finishLibraryOperation() {
+    if (!mounted) return;
+    ref.invalidate(workingDirectoryProvider);
+    setState(() => _busy = false);
+  }
 
   Future<void> _pickLocalFiles() async {
     if (_busy) return;
@@ -46,52 +79,78 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           );
       if (!mounted) return;
       if (!res.isEmpty) {
-        setState(() => _lastResult = res);
+        _recordResult(res);
         _showResultSnack(res);
       }
+    } catch (e) {
+      if (!mounted) return;
+      _showError(localizeError(context.l10n, e));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _finishLibraryOperation();
     }
   }
 
-  Future<void> _addAndScanDirectory() async {
+  Future<void> _scanFolders({bool chooseFolder = false}) async {
     if (_busy) return;
     setState(() => _busy = true);
     try {
+      final db = ref.read(appDatabaseProvider);
       final svc = ref.read(importServiceProvider);
-      await svc.addWatchedDirectory();
-      final scanned = await svc.scanWatchedFolders();
+      if (chooseFolder || (await db.getWatchedFolders()).isEmpty) {
+        final folder = await svc.addWatchedDirectory();
+        if (folder == null || !mounted) return;
+      }
+      final scanErrors = <String>[];
+      final scanned = await svc.scanWatchedFolders(
+        onFolderError: (folder, error) {
+          if (mounted) {
+            scanErrors.add(
+              '${folder.displayName} · ${localizeError(context.l10n, error)}',
+            );
+          }
+        },
+      );
       if (!mounted) return;
       setState(() {
         _candidates = scanned;
         _foldersExpanded = true;
+        _selectedFormat = 'all';
       });
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.folderScanDoneToast(scanned.length)),
-        ),
-      );
+      ScaffoldMessenger.of(context)
+        ..clearSnackBars()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              scanErrors.isEmpty
+                  ? context.l10n.folderScanDoneToast(scanned.length)
+                  : context.l10n.folderScanFailed(scanErrors.join('\n')),
+            ),
+          ),
+        );
+    } catch (e) {
+      if (!mounted) return;
+      _showError(context.l10n.folderScanFailed(localizeError(context.l10n, e)));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _rescanWatched() async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
-      final scanned =
-          await ref.read(importServiceProvider).scanWatchedFolders();
-      if (!mounted) return;
-      setState(() => _candidates = scanned);
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(context.l10n.folderScanDoneToast(scanned.length)),
-        ),
-      );
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+  void _showError(String message) {
+    ScaffoldMessenger.of(context)
+      ..clearSnackBars()
+      ..showSnackBar(SnackBar(content: Text(message)));
+  }
+
+  void _recordResult(ImportBatchResult result) {
+    setState(() {
+      _clearResult();
+      _lastResult = result;
+      if (result.booksImported > 0 && result.mangasImported == 0) {
+        _showComicHistory = false;
+      } else if (result.mangasImported > 0 && result.booksImported == 0) {
+        _showComicHistory = true;
+      }
+    });
   }
 
   Future<void> _importSelected() async {
@@ -106,14 +165,14 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                 targetBookShelfId: ref.read(activeBookShelfIdProvider),
                 targetMangaShelfId: ref.read(activeMangaShelfIdProvider),
               );
-      if (!mounted) return;
-      setState(() {
-        _candidates = _candidates.where((c) => !c.selected).toList();
-        _lastResult = res;
-      });
+      if (!mounted || res.isEmpty) return;
+      _candidates = _candidates.where((c) => !c.selected).toList();
+      _recordResult(res);
       _showResultSnack(res);
+    } catch (error) {
+      if (mounted) _showError(localizeError(context.l10n, error));
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _finishLibraryOperation();
     }
   }
 
@@ -121,12 +180,15 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
     if (_busy) return;
     setState(() => _busy = true);
     try {
-      final outcome =
-          await ref.read(importServiceProvider).importLocalPathDetailed(
+      final storage = ref.read(libraryStorageProvider);
+      final importer = ref.read(importServiceProvider);
+      if (!await storage.ensureWorkingDirectory() || !mounted) return;
+      final outcome = await importer.importLocalPathDetailed(
                 dup.localPath,
                 forceKind: dup.kind,
                 overwriteExisting: true,
               );
+      await storage.releaseTemp(dup.localPath);
       if (!mounted) return;
       setState(() {
         if (_lastResult != null) {
@@ -147,10 +209,11 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
       });
       final l10n = context.l10n;
       ScaffoldMessenger.of(context)
-        ..hideCurrentSnackBar()
+        ..clearSnackBars()
         ..showSnackBar(
           SnackBar(
             content: Text(l10n.overwriteSuccessToast(outcome.title)),
+            persist: false,
             action: outcome.id != null
                 ? SnackBarAction(
                     label: l10n.readNow,
@@ -168,7 +231,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
         ),
       );
     } finally {
-      if (mounted) setState(() => _busy = false);
+      _finishLibraryOperation();
     }
   }
 
@@ -197,7 +260,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
         ),
       ],
     );
-    if (confirmed != true) return;
+    if (confirmed != true || !mounted) return;
     final svc = ref.read(importServiceProvider);
     if (isComic) {
       await svc.permanentlyDeleteMangas([id]);
@@ -206,7 +269,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
     }
     if (!mounted) return;
     ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
+      ..clearSnackBars()
       ..showSnackBar(
         SnackBar(content: Text(context.l10n.deletedForeverToast(title))),
       );
@@ -279,11 +342,12 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
       buf.write(l10n.importResultFailed(res.errors.length));
     }
     ScaffoldMessenger.of(context)
-      ..hideCurrentSnackBar()
+      ..clearSnackBars()
       ..showSnackBar(
         SnackBar(
           content: Text(buf.toString()),
           duration: const Duration(seconds: 4),
+          persist: false,
           action: (res.booksImported > 0 || res.mangasImported > 0)
               ? SnackBarAction(
                   label: res.booksImported > 0
@@ -304,10 +368,12 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
     final l10n = context.l10n;
     final health = ref.watch(coreHealthProvider);
     final foldersAsync = ref.watch(watchedFoldersStreamProvider);
-    final bookHistory =
-        ref.watch(bookHistoryStreamProvider).valueOrNull ?? const <Book>[];
-    final mangaHistory =
-        ref.watch(mangaHistoryStreamProvider).valueOrNull ?? const <Manga>[];
+    final bookHistory = _showComicHistory
+        ? const <Book>[]
+        : ref.watch(bookHistoryStreamProvider).valueOrNull ?? const <Book>[];
+    final mangaHistory = _showComicHistory
+        ? ref.watch(mangaHistoryStreamProvider).valueOrNull ?? const <Manga>[]
+        : const <Manga>[];
     final wide = isWideLayout(context);
     final expanded = isExpandedLayout(context);
     final bottomPad = wide
@@ -332,7 +398,6 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           isArchived: b.isArchived,
           addedAtMs: b.addedAtMs,
           localPath: b.filePath,
-          fileExists: File(b.filePath).existsSync(),
           subtitle: l10n.historyBookSubtitle(
             localizedAuthor(l10n, b.author),
             (b.progressRatio * 100).round(),
@@ -348,8 +413,6 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           isArchived: m.isArchived,
           addedAtMs: m.addedAtMs,
           localPath: m.rootPath,
-          fileExists: FileSystemEntity.typeSync(m.rootPath) !=
-              FileSystemEntityType.notFound,
           subtitle: l10n.historyMangaSubtitle(
             localizedAuthor(l10n, m.author),
             m.totalChapters,
@@ -366,12 +429,10 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
 
     final actionWidgets = _buildActionsColumn(
       tokens: tokens,
-      l10n: l10n,
       foldersAsync: foldersAsync,
     );
     final listWidgets = _buildListsColumn(
       tokens: tokens,
-      l10n: l10n,
       visibleCandidates: visibleCandidates,
       historyEntries: historyEntries,
       filteredHistory: filteredHistory,
@@ -405,7 +466,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                         color: tokens.inkPrimary,
                       ),
                       tooltip: l10n.rescanFolders,
-                      onPressed: _rescanWatched,
+                      onPressed: _scanFolders,
                     ),
                   ],
                 ),
@@ -503,11 +564,39 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
 
   List<Widget> _buildActionsColumn({
     required InkBoxTokens tokens,
-    required dynamic l10n,
     required AsyncValue<List<WatchedFolder>> foldersAsync,
   }) {
     final loc = context.l10n;
+    final storage = ref.watch(libraryStorageProvider);
+    final workDirectory = storage.requiresWorkingDirectory
+        ? ref.watch(workingDirectoryProvider).valueOrNull
+        : null;
     return [
+      if (storage.requiresWorkingDirectory) ...[
+        FloatingCard(
+          onTap: _busy ? null : _chooseWorkingDirectory,
+          child: Row(
+            children: [
+              InkIconWidget(InkIcon.folder, size: 20, color: tokens.accentPrimary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(loc.workingDirectoryTitle, style: const TextStyle(fontWeight: FontWeight.w700)),
+                    Text(
+                      workDirectory?.name ?? loc.workingDirectoryChoose,
+                      style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+                    ),
+                  ],
+                ),
+              ),
+              InkIconWidget(InkIcon.chevronRight, size: 15, color: tokens.inkMuted),
+            ],
+          ),
+        ),
+        const SizedBox(height: 10),
+      ],
       Row(
         children: [
           Expanded(
@@ -543,7 +632,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
             child: FloatingCard(
               backgroundColor: tokens.accentSoft,
               borderColor: Colors.transparent,
-              onTap: _addAndScanDirectory,
+              onTap: () => _scanFolders(chooseFolder: true),
               padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               child: Row(
                 children: [
@@ -571,6 +660,14 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           ),
         ],
       ),
+      if (storage.requiresWorkingDirectory)
+        Padding(
+          padding: const EdgeInsets.fromLTRB(4, 8, 4, 0),
+          child: Text(
+            loc.androidImportStorageHint,
+            style: TextStyle(fontSize: 12, color: tokens.inkMuted),
+          ),
+        ),
       const SizedBox(height: 10),
       FloatingCard(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -705,7 +802,6 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
 
   List<Widget> _buildListsColumn({
     required InkBoxTokens tokens,
-    required dynamic l10n,
     required List<ImportCandidate> visibleCandidates,
     required List<_HistoryEntry> historyEntries,
     required List<_HistoryEntry> filteredHistory,
@@ -738,7 +834,9 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           return Padding(
             padding: const EdgeInsets.only(bottom: 8),
             child: FloatingCard(
-              onTap: () => setState(() => c.selected = !c.selected),
+              onTap: _busy
+                  ? null
+                  : () => setState(() => c.selected = !c.selected),
               borderColor: c.selected ? tokens.accentPrimary : null,
               padding: const EdgeInsets.symmetric(
                 horizontal: 12,
@@ -810,10 +908,12 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                     ),
                   ),
                   TextButton(
-                    onPressed: () => setState(() {
-                      c.targetKind =
-                          c.targetKind == 'comic' ? 'book' : 'comic';
-                    }),
+                    onPressed: _busy
+                        ? null
+                        : () => setState(() {
+                              c.targetKind =
+                                  c.targetKind == 'comic' ? 'book' : 'comic';
+                            }),
                     child: Text(
                       c.targetKind == 'comic'
                           ? loc.switchToBook
@@ -847,26 +947,41 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
               color: tokens.inkPrimary,
             ),
           ),
-          const Spacer(),
+        ],
+      ),
+      const SizedBox(height: 8),
+      Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: [
+          InkPillChip(
+            label: loc.historyBooks,
+            leadingIcon: InkIcon.bookshelf,
+            selected: !_showComicHistory,
+            onTap: () => setState(() => _showComicHistory = false),
+          ),
+          InkPillChip(
+            label: loc.historyComics,
+            leadingIcon: InkIcon.manga,
+            selected: _showComicHistory,
+            onTap: () => setState(() => _showComicHistory = true),
+          ),
+        ],
+      ),
+      const SizedBox(height: 6),
+      Wrap(
+        spacing: 6,
+        children: [
           ...[
             ('all', loc.historyAll),
             ('archived', loc.historyArchived),
             ('on_shelf', loc.historyOnShelf),
           ].map((pair) {
             final active = _historyFilter == pair.$1;
-            return Padding(
-              padding: const EdgeInsets.only(left: 8),
-              child: GestureDetector(
-                onTap: () => setState(() => _historyFilter = pair.$1),
-                child: Text(
-                  pair.$2,
-                  style: TextStyle(
-                    fontSize: 11.5,
-                    fontWeight: active ? FontWeight.w700 : FontWeight.w500,
-                    color: active ? tokens.accentPrimary : tokens.inkMuted,
-                  ),
-                ),
-              ),
+            return InkPillChip(
+              label: pair.$2,
+              selected: active,
+              onTap: () => setState(() => _historyFilter = pair.$1),
             );
           }),
         ],
@@ -886,164 +1001,174 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
           ),
         )
       else
-        ...filteredHistory.map((item) {
-          return Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: FloatingCard(
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-              child: Row(
-                children: [
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 7,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: item.isArchived
-                          ? tokens.surfaceVariant
-                          : tokens.accentSoft,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Text(
-                      item.format,
-                      style: TextStyle(
-                        fontSize: 9.5,
-                        fontWeight: FontWeight.w700,
-                        color: item.isArchived
-                            ? tokens.inkMuted
-                            : tokens.accentPrimary,
+        ...filteredHistory.map((item) => Builder(builder: (context) {
+          final storage = ref.read(libraryStorageProvider);
+          return FutureBuilder<bool>(
+            future: storage.exists(item.localPath),
+            builder: (context, availability) {
+              final fileExists =
+                  !availability.hasError && (availability.data ?? true);
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: FloatingCard(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  child: Row(
+                    children: [
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 7,
+                          vertical: 4,
+                        ),
+                        decoration: BoxDecoration(
+                          color: item.isArchived
+                              ? tokens.surfaceVariant
+                              : tokens.accentSoft,
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          item.format,
+                          style: TextStyle(
+                            fontSize: 9.5,
+                            fontWeight: FontWeight.w700,
+                            color: item.isArchived
+                                ? tokens.inkMuted
+                                : tokens.accentPrimary,
+                          ),
+                        ),
                       ),
-                    ),
-                  ),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            Flexible(
-                              child: Text(
-                                item.title,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(
-                                  fontSize: 13,
-                                  fontWeight: FontWeight.w600,
-                                  color: tokens.inkPrimary,
+                            Row(
+                              children: [
+                                Flexible(
+                                  child: Text(
+                                    item.title,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: TextStyle(
+                                      fontSize: 13,
+                                      fontWeight: FontWeight.w600,
+                                      color: tokens.inkPrimary,
+                                    ),
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  !fileExists
+                                      ? loc.fileMissingBadge
+                                      : (item.isArchived
+                                          ? loc.archivedBadge
+                                          : loc.onShelfBadge),
+                                  style: TextStyle(
+                                    fontSize: 10,
+                                    fontWeight: FontWeight.w600,
+                                    color: (!fileExists || item.isArchived)
+                                        ? tokens.accentWarm
+                                        : tokens.statusOk,
+                                  ),
+                                ),
+                              ],
                             ),
-                            const SizedBox(width: 6),
+                            const SizedBox(height: 2),
                             Text(
-                              !item.fileExists
-                                  ? loc.fileMissingBadge
-                                  : (item.isArchived
-                                      ? loc.archivedBadge
-                                      : loc.onShelfBadge),
+                              item.subtitle,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
                               style: TextStyle(
-                                fontSize: 10,
-                                fontWeight: FontWeight.w600,
-                                color: (!item.fileExists || item.isArchived)
-                                    ? tokens.accentWarm
-                                    : tokens.statusOk,
+                                fontSize: 11,
+                                color: tokens.inkMuted,
                               ),
                             ),
                           ],
                         ),
-                        const SizedBox(height: 2),
-                        Text(
-                          item.subtitle,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: TextStyle(
-                            fontSize: 11,
-                            color: tokens.inkMuted,
+                      ),
+                      if (item.isArchived)
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          onPressed: () async {
+                            final available = await storage.exists(item.localPath);
+                            if (!mounted) return;
+                            if (!available) {
+                              ScaffoldMessenger.of(this.context)
+                                ..clearSnackBars()
+                                ..showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      loc.fileMissingReimportToast(item.title),
+                                    ),
+                                  ),
+                                );
+                              return;
+                            }
+                            final db = ref.read(appDatabaseProvider);
+                            if (item.isComic) {
+                              await db.restoreMangaToShelf(item.id);
+                            } else {
+                              await db.restoreBookToShelf(item.id);
+                            }
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(this.context)
+                              ..clearSnackBars()
+                              ..showSnackBar(
+                                SnackBar(
+                                  content:
+                                      Text(loc.restoredToShelfToast(item.title)),
+                                ),
+                              );
+                          },
+                          child: Text(
+                            loc.restoreToShelf,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w700,
+                              color: tokens.accentPrimary,
+                            ),
+                          ),
+                        )
+                      else
+                        TextButton(
+                          style: TextButton.styleFrom(
+                            visualDensity: VisualDensity.compact,
+                          ),
+                          onPressed: () => context.push(
+                            item.isComic
+                                ? '/manga/${item.id}'
+                                : '/reader/book/${item.id}',
+                          ),
+                          child: Text(
+                            loc.readNow,
+                            style: TextStyle(
+                              fontSize: 12,
+                              color: tokens.accentPrimary,
+                            ),
                           ),
                         ),
-                      ],
-                    ),
-                  ),
-                  if (item.isArchived)
-                    TextButton(
-                      style: TextButton.styleFrom(
+                      IconButton(
+                        tooltip: loc.removePermanentOption,
                         visualDensity: VisualDensity.compact,
-                      ),
-                      onPressed: () async {
-                        if (!item.fileExists) {
-                          ScaffoldMessenger.of(context)
-                            ..hideCurrentSnackBar()
-                            ..showSnackBar(
-                              SnackBar(
-                                content: Text(
-                                  loc.fileMissingReimportToast(item.title),
-                                ),
-                              ),
-                            );
-                          return;
-                        }
-                        final db = ref.read(appDatabaseProvider);
-                        if (item.isComic) {
-                          await db.restoreMangaToShelf(item.id);
-                        } else {
-                          await db.restoreBookToShelf(item.id);
-                        }
-                        if (!mounted) return;
-                        ScaffoldMessenger.of(context)
-                          ..hideCurrentSnackBar()
-                          ..showSnackBar(
-                            SnackBar(
-                              content:
-                                  Text(loc.restoredToShelfToast(item.title)),
-                            ),
-                          );
-                      },
-                      child: Text(
-                        loc.restoreToShelf,
-                        style: TextStyle(
-                          fontSize: 12,
-                          fontWeight: FontWeight.w700,
-                          color: tokens.accentPrimary,
+                        onPressed: () => _confirmPermanentDelete(
+                          title: item.title,
+                          isComic: item.isComic,
+                          id: item.id,
+                        ),
+                        icon: InkIconWidget(
+                          InkIcon.trash,
+                          size: 16,
+                          color: tokens.accentWarm,
                         ),
                       ),
-                    )
-                  else
-                    TextButton(
-                      style: TextButton.styleFrom(
-                        visualDensity: VisualDensity.compact,
-                      ),
-                      onPressed: () => context.push(
-                        item.isComic
-                            ? '/manga/${item.id}'
-                            : '/reader/book/${item.id}',
-                      ),
-                      child: Text(
-                        loc.readNow,
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: tokens.accentPrimary,
-                        ),
-                      ),
-                    ),
-                  IconButton(
-                    tooltip: loc.removePermanentOption,
-                    visualDensity: VisualDensity.compact,
-                    onPressed: () => _confirmPermanentDelete(
-                      title: item.title,
-                      isComic: item.isComic,
-                      id: item.id,
-                    ),
-                    icon: InkIconWidget(
-                      InkIcon.trash,
-                      size: 16,
-                      color: tokens.accentWarm,
-                    ),
+                    ],
                   ),
-                ],
-              ),
-            ),
+                ),
+              );
+            },
           );
-        }),
+        })),
     ];
   }
 
@@ -1074,7 +1199,7 @@ class _ImportHubPageState extends ConsumerState<ImportHubPage> {
                 ),
               ),
               TextButton(
-                onPressed: () => setState(() => _lastResult = null),
+                onPressed: _busy ? null : () => setState(_clearResult),
                 style: TextButton.styleFrom(
                   visualDensity: VisualDensity.compact,
                 ),
@@ -1203,7 +1328,6 @@ class _HistoryEntry {
     required this.isArchived,
     required this.addedAtMs,
     required this.localPath,
-    required this.fileExists,
     required this.subtitle,
   });
 
@@ -1214,6 +1338,5 @@ class _HistoryEntry {
   final bool isArchived;
   final int addedAtMs;
   final String localPath;
-  final bool fileExists;
   final String subtitle;
 }

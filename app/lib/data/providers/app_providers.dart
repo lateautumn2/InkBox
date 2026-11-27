@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../features/importer/import_service.dart';
 import '../db/app_database.dart';
 import '../ffi/rust_core_bridge.dart';
+import '../platform/library_storage.dart';
 import '../platform/platform_bridge.dart';
 
 final appDatabaseProvider = Provider<AppDatabase>((ref) {
@@ -19,10 +20,17 @@ final platformBridgeProvider = Provider<PlatformBridge>((ref) {
   return MethodChannelPlatformBridge();
 });
 
+final libraryStorageProvider = Provider<LibraryStorage>((ref) => LibraryStorage());
+
+final workingDirectoryProvider = FutureProvider<PickedDirectory?>(
+  (ref) => ref.watch(libraryStorageProvider).workingDirectory(),
+);
+
 final importServiceProvider = Provider<ImportService>((ref) {
   return ImportService(
     db: ref.watch(appDatabaseProvider),
     platform: ref.watch(platformBridgeProvider),
+    storage: ref.watch(libraryStorageProvider),
     rustCore: ref.watch(rustCoreProvider),
   );
 });

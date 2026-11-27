@@ -122,7 +122,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
     final navBottomInset = MediaQuery.paddingOf(context).bottom;
     final wide = isWideLayout(context);
 
-    return SafeArea(
+    final shelf = SafeArea(
       bottom: false,
       child: Stack(
         children: [
@@ -143,26 +143,10 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
                           color: tokens.accentSoft,
                           borderRadius: BorderRadius.circular(999),
                         ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            if (shelves.length > 1) ...[
-                              Text(
-                                l10n.shelvesCountBadge(shelves.length),
-                                style: TextStyle(
-                                  fontSize: 10.5,
-                                  fontWeight: FontWeight.w700,
-                                  color: tokens.accentPrimary,
-                                ),
-                              ),
-                              const SizedBox(width: 2),
-                            ],
-                            InkIconWidget(
-                              InkIcon.chevronDown,
-                              size: 13,
-                              color: tokens.accentPrimary,
-                            ),
-                          ],
+                        child: InkIconWidget(
+                          InkIcon.chevronDown,
+                          size: 13,
+                          color: tokens.accentPrimary,
                         ),
                       ),
                 onTitleTap: selecting
@@ -508,6 +492,7 @@ class _MangaShelfPageState extends ConsumerState<MangaShelfPage> {
         ],
       ),
     );
+    return KeyboardInsetPadding(enabled: _showSearch, child: shelf);
   }
 }
 

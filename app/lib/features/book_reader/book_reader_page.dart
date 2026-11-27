@@ -17,6 +17,7 @@ import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
 import '../../data/ffi/rust_core_bridge.dart';
 import '../../data/platform/platform_bridge.dart';
+import '../../data/platform/library_storage.dart';
 import '../../data/providers/app_providers.dart';
 import '../tts/tts_models.dart';
 import '../tts/tts_playback_controller.dart';
@@ -53,6 +54,7 @@ class BookReaderPage extends ConsumerStatefulWidget {
 
 class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   Book? _book;
+  final Map<String, ReadableMedia> _bookFiles = {};
   List<BookChapterRef> _chapters = const [];
   LoadedBookChapter? _loadedChapter;
   List<BookPageSlice> _pages = const [];
@@ -159,6 +161,10 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     _platform.setKeepScreenOn(false);
     _ttsCtrl.removeListener(_onTtsControllerChanged);
     _ttsCtrl.dispose();
+    for (final media in _bookFiles.values) {
+      unawaited(media.close());
+    }
+    _bookFiles.clear();
     super.dispose();
   }
 
@@ -181,12 +187,14 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
   }
 
   Future<void> _initReader() async {
-    final book = await _db.findBookById(widget.bookId);
+    final entry = await _db.findBookById(widget.bookId);
     if (!mounted) return;
-    if (book == null) {
+    if (entry == null) {
       setState(() => _loading = false);
       return;
     }
+    final book = await _readableBook(entry);
+    if (!mounted) return;
 
     final settings = ref.read(bookReaderSettingsProvider);
     await _platform.setKeepScreenOn(settings.keepScreenOn);
@@ -232,6 +240,26 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     await _loadChapter(startCh, initialOffset: startOffset);
   }
 
+  Future<Book> _readableBook(Book entry) async {
+    if (!LibraryStorage.isDocument(entry.filePath)) return entry;
+    final previous = _bookFiles[entry.filePath];
+    if (previous != null) return entry.copyWith(filePath: previous.path);
+    try {
+      final media = await ref.read(libraryStorageProvider).open(
+        entry.filePath,
+        extension: entry.format,
+      );
+      if (!mounted) {
+        await media.close();
+        return entry;
+      }
+      _bookFiles[entry.filePath] = media;
+      return entry.copyWith(filePath: media.path);
+    } catch (_) {
+      return entry;
+    }
+  }
+
   Future<void> _refreshAnnotations() async {
     final book = _book;
     if (book == null) return;
@@ -259,16 +287,19 @@ class _BookReaderPageState extends ConsumerState<BookReaderPage> {
     if (!mounted || fresh == null) return;
     await _refreshAnnotations();
 
-    final tocChanged =
-        fresh.tocRuleId != prevRuleId || fresh.forcedEncoding != prevEncoding;
+    final resolved = await _readableBook(fresh);
+    if (!mounted) return;
+    final tocChanged = fresh.tocRuleId != prevRuleId ||
+        fresh.forcedEncoding != prevEncoding ||
+        resolved.filePath != book.filePath;
     if (tocChanged) {
       await _reloadTocFromBook(
-        fresh,
+        resolved,
         targetChapter: chosen?.chapterIndex ?? _chapterIdx,
         initialOffset: chosen?.charOffset ?? 0,
       );
     } else {
-      setState(() => _book = fresh);
+      setState(() => _book = resolved);
       if (chosen != null) {
         await _loadChapter(
           chosen.chapterIndex,

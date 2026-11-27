@@ -22,7 +22,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get navImport => 'Import';
 
   @override
-  String get navMe => 'Me';
+  String get navMe => 'Settings';
 
   @override
   String get cancel => 'Cancel';
@@ -559,7 +559,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get shelfExampleManga => 'e.g. Ongoing, Completed';
 
   @override
-  String get mineTitle => 'Me';
+  String get mineTitle => 'Settings';
 
   @override
   String get appearanceSettings => 'Appearance';
@@ -691,7 +691,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get pickLocalFiles => 'Pick Files';
 
   @override
-  String get addAndScanFolder => 'Scan Folder';
+  String get addAndScanFolder => 'Choose Scan Folder';
 
   @override
   String get importOptions => 'Options';
@@ -728,8 +728,7 @@ class AppLocalizationsEn extends AppLocalizations {
   String get historyOnShelf => 'On Shelf';
 
   @override
-  String get noImportHistory =>
-      'No import history. Supports EPUB, TXT, PDF, MOBI, AZW3, FB2, MD, CBZ, CB7.';
+  String get noImportHistory => 'No imports yet';
 
   @override
   String get noMatchingHistory => 'No matching records';
@@ -1708,4 +1707,61 @@ class AppLocalizationsEn extends AppLocalizations {
 
   @override
   String get errUnknown => 'Operation failed';
+
+  @override
+  String get androidImportStorageHint =>
+      'Books and comics are copied into the working folder. You can scan any folder you authorize.';
+
+  @override
+  String folderScanFailed(String error) {
+    return 'Folder scan failed: $error';
+  }
+
+  @override
+  String get historyBooks => 'Books';
+
+  @override
+  String get historyComics => 'Comics';
+
+  @override
+  String get themeInkWash => 'Ink Wash';
+
+  @override
+  String get localBackupTitle => 'Local Backup';
+
+  @override
+  String get localBackupSummary => 'Export or import a library ZIP';
+
+  @override
+  String get localBackupDescription =>
+      'Backups include available book and comic files, shelves, import history, reading progress, bookmarks, notes, and chapter rules. Import merges libraries and skips books and comics already present.';
+
+  @override
+  String get localBackupExport => 'Export Backup';
+
+  @override
+  String get localBackupImport => 'Import Backup';
+
+  @override
+  String get localBackupExported => 'Local backup exported';
+
+  @override
+  String localBackupImported(int books, int comics, int skipped) {
+    return 'Restored $books books and $comics comics. Skipped $skipped duplicates.';
+  }
+
+  @override
+  String localBackupFailed(String error) {
+    return 'Backup failed: $error';
+  }
+
+  @override
+  String get workingDirectoryTitle => 'Working Folder';
+
+  @override
+  String get workingDirectoryChoose => 'Choose where to store books and comics';
+
+  @override
+  String get errWorkDirectory =>
+      'Choose a working folder with read and write access';
 }

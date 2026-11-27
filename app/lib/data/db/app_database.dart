@@ -391,6 +391,24 @@ class AppDatabase extends _$AppDatabase {
       (select(books)..where((t) => t.contentHash.equals(hash)))
           .getSingleOrNull();
 
+  Future<bool> hasMediaReference(String path) async {
+    final book = await (select(books)
+          ..where((row) => row.filePath.equals(path))
+          ..limit(1))
+        .getSingleOrNull();
+    if (book != null) return true;
+    final manga = await (select(mangas)
+          ..where((row) => row.rootPath.equals(path))
+          ..limit(1))
+        .getSingleOrNull();
+    if (manga != null) return true;
+    return await (select(mangaChapters)
+              ..where((row) => row.sourcePath.equals(path))
+              ..limit(1))
+            .getSingleOrNull() !=
+        null;
+  }
+
   Future<int> upsertBook(BooksCompanion entry) => into(books).insert(
         entry,
         onConflict: DoUpdate((_) => entry, target: [books.contentHash]),

@@ -14,7 +14,6 @@ import '../../core/widgets/floating_surface.dart';
 import '../../core/widgets/ink_controls.dart';
 import '../../data/db/app_database.dart';
 import '../../data/providers/app_providers.dart';
-import '../importer/import_service.dart';
 import 'toc_rules_parser.dart';
 
 /// TXT TOC Rule Manager supporting GitHub Legado `txtTocRule.json` import,
@@ -42,6 +41,7 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
 
   Future<void> _importFromFile() async {
     final l10n = context.l10n;
+    final storage = ref.read(libraryStorageProvider);
     final picked =
         await ref.read(platformBridgeProvider).pickDocumentsDetailed();
     if (picked.paths.isEmpty) {
@@ -63,7 +63,7 @@ class _TocRulesPageState extends ConsumerState<TocRulesPage> {
       } catch (e) {
         _toast(localizeError(l10n, e));
       } finally {
-        ImportService.cleanupManagedFileIfOwned(path);
+        await storage.releaseTemp(path);
       }
     }
     if (!mounted) return;

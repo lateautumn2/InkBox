@@ -102,6 +102,7 @@ String localizeError(AppLocalizations l10n, Object error) {
   if (raw.contains('ERR_FILE_NOT_FOUND')) return l10n.errFileNotFound;
   if (raw.contains('ERR_FILE_EMPTY')) return l10n.errFileEmpty;
   if (raw.contains('ERR_STREAM_OPEN')) return l10n.errStreamOpen;
+  if (raw.contains('ERR_WORK_DIRECTORY')) return l10n.errWorkDirectory;
   if (raw.contains('ERR_UNSUPPORTED_TYPE')) return l10n.errUnsupportedType;
   if (raw.contains('ERR_TTS_UNAVAILABLE') ||
       raw.contains('ERR_TTS_NOT_READY')) {
@@ -125,6 +126,7 @@ extension BookPaperThemeL10n on BookPaperTheme {
         BookPaperTheme.sage => l10n.paperSage,
         BookPaperTheme.dark => l10n.paperDark,
         BookPaperTheme.oled => l10n.paperOled,
+        BookPaperTheme.inkWash => l10n.themeInkWash,
       };
 }
 

@@ -19,20 +19,7 @@ Future<int?> showShelfSwitcherSheet({
     useRootNavigator: true,
     backgroundColor: Colors.transparent,
     isScrollControlled: true,
-    builder: (_) => _ShelfSwitcherSheet(initialMediaKind: mediaKind),
-  );
-}
-
-Future<void> showDualShelfManagerSheet(BuildContext context) {
-  return showModalBottomSheet<void>(
-    context: context,
-    useRootNavigator: true,
-    backgroundColor: Colors.transparent,
-    isScrollControlled: true,
-    builder: (_) => const _ShelfSwitcherSheet(
-      initialMediaKind: 'book',
-      allowKindToggle: true,
-    ),
+    builder: (_) => _ShelfSwitcherSheet(mediaKind: mediaKind),
   );
 }
 
@@ -119,13 +106,9 @@ Future<int?> showMoveToShelfDialog({
 }
 
 class _ShelfSwitcherSheet extends ConsumerStatefulWidget {
-  const _ShelfSwitcherSheet({
-    required this.initialMediaKind,
-    this.allowKindToggle = false,
-  });
+  const _ShelfSwitcherSheet({required this.mediaKind});
 
-  final String initialMediaKind;
-  final bool allowKindToggle;
+  final String mediaKind;
 
   @override
   ConsumerState<_ShelfSwitcherSheet> createState() =>
@@ -133,13 +116,7 @@ class _ShelfSwitcherSheet extends ConsumerStatefulWidget {
 }
 
 class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
-  late String _mediaKind;
-
-  @override
-  void initState() {
-    super.initState();
-    _mediaKind = widget.initialMediaKind;
-  }
+  String get _mediaKind => widget.mediaKind;
 
   Future<void> _promptCreateShelf() async {
     final isComic = _mediaKind == 'comic';
@@ -184,9 +161,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
     } else {
       ref.read(activeBookShelfIdProvider.notifier).state = created.id;
     }
-    if (!widget.allowKindToggle && mounted) {
-      Navigator.of(context).pop(created.id);
-    }
+    Navigator.of(context).pop(created.id);
   }
 
   Future<void> _promptRenameShelf(Shelf shelf) async {
@@ -266,7 +241,6 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
   Widget build(BuildContext context) {
     final tokens = InkBoxTokens.of(context);
     final l10n = context.l10n;
-    final bottomInset = MediaQuery.viewInsetsOf(context).bottom;
     final isComic = _mediaKind == 'comic';
     final wide = isWideLayout(context);
 
@@ -274,10 +248,6 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
             ? ref.watch(mangaShelvesStreamProvider).valueOrNull
             : ref.watch(bookShelvesStreamProvider).valueOrNull) ??
         const <Shelf>[];
-    final books = ref.watch(booksStreamProvider).valueOrNull ?? const <Book>[];
-    final mangas =
-        ref.watch(mangasStreamProvider).valueOrNull ?? const <Manga>[];
-
     final activeRawId = isComic
         ? ref.watch(activeMangaShelfIdProvider)
         : ref.watch(activeBookShelfIdProvider);
@@ -295,6 +265,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
               ));
 
     return SafeArea(
+      maintainBottomViewPadding: true,
       child: Center(
         heightFactor: 1.0,
         child: ConstrainedBox(
@@ -306,7 +277,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
               tokens.isFloatingCard ? 14 : 0,
               0,
               tokens.isFloatingCard ? 14 : 0,
-              (tokens.isFloatingCard ? 14 : 0) + bottomInset,
+              tokens.isFloatingCard ? 14 : 0,
             ),
             child: FloatingCard(
               frosted: true,
@@ -335,11 +306,9 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
                       children: [
                         Expanded(
                           child: Text(
-                            widget.allowKindToggle
-                                ? l10n.multiShelfManagerTitle
-                                : (isComic
-                                    ? l10n.switchMangaShelfTitle
-                                    : l10n.switchBookshelfTitle),
+                            isComic
+                                ? l10n.switchMangaShelfTitle
+                                : l10n.switchBookshelfTitle,
                             style: Theme.of(context)
                                 .textTheme
                                 .titleMedium
@@ -359,26 +328,6 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
                         ),
                       ],
                     ),
-                    if (widget.allowKindToggle) ...[
-                      const SizedBox(height: 10),
-                      Row(
-                        children: [
-                          InkPillChip(
-                            label: l10n.bookshelfTab,
-                            leadingIcon: InkIcon.bookshelf,
-                            selected: !isComic,
-                            onTap: () => setState(() => _mediaKind = 'book'),
-                          ),
-                          const SizedBox(width: 8),
-                          InkPillChip(
-                            label: l10n.mangaShelfTab,
-                            leadingIcon: InkIcon.manga,
-                            selected: isComic,
-                            onTap: () => setState(() => _mediaKind = 'comic'),
-                          ),
-                        ],
-                      ),
-                    ],
                     const SizedBox(height: 12),
                     Flexible(
                       child: ListView.separated(
@@ -388,22 +337,6 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
                         itemBuilder: (_, idx) {
                           final s = shelves[idx];
                           final selected = s.id == activeId;
-                          final itemCount = isComic
-                              ? mangas
-                                  .where((m) =>
-                                      AppDatabase.resolveEffectiveShelfId(
-                                          m.shelfId, shelves) ==
-                                      s.id)
-                                  .length
-                              : books
-                                  .where((b) =>
-                                      AppDatabase.resolveEffectiveShelfId(
-                                          b.shelfId, shelves) ==
-                                      s.id)
-                                  .length;
-                          final countLabel = isComic
-                              ? l10n.shelfItemCountManga(itemCount)
-                              : l10n.shelfItemCountBook(itemCount);
                           return Material(
                             color: selected
                                 ? tokens.accentSoft
@@ -421,9 +354,7 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
                                       .read(activeBookShelfIdProvider.notifier)
                                       .state = s.id;
                                 }
-                                if (!widget.allowKindToggle) {
-                                  Navigator.of(context).pop(s.id);
-                                }
+                                Navigator.of(context).pop(s.id);
                               },
                               child: Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -497,16 +428,16 @@ class _ShelfSwitcherSheetState extends ConsumerState<_ShelfSwitcherSheet> {
                                               ],
                                             ],
                                           ),
-                                          const SizedBox(height: 2),
-                                          Text(
-                                            selected
-                                                ? '$countLabel · ${l10n.inUseLabel}'
-                                                : countLabel,
-                                            style: TextStyle(
-                                              fontSize: 11,
-                                              color: tokens.inkMuted,
+                                          if (selected) ...[
+                                            const SizedBox(height: 2),
+                                            Text(
+                                              l10n.inUseLabel,
+                                              style: TextStyle(
+                                                fontSize: 11,
+                                                color: tokens.inkMuted,
+                                              ),
                                             ),
-                                          ),
+                                          ],
                                         ],
                                       ),
                                     ),
