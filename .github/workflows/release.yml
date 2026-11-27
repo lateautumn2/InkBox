@@ -3,16 +3,23 @@ name: Publish Android APK
 on:
   push:
     tags:
-      - 'v[0-9]+.[0-9]+.[0-9]+'
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to publish
+        type: string
+        required: true
 
 permissions:
   contents: read
 
 concurrency:
-  group: android-release-${{ github.ref }}
+  group: android-release-${{ inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
   ANDROID_NDK_VERSION: '28.2.13676358'
   ANDROID_BUILD_TOOLS: '36.0.0'
   FLUTTER_VERSION: '3.50.1'
@@ -24,9 +31,20 @@ jobs:
     runs-on: windows-2025
     timeout-minutes: 35
     steps:
+      - name: Read Android version from tag
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$') {
+            throw 'Expected a vMAJOR.MINOR.PATCH tag with up to three digits per component'
+          }
+          $versionCode = [int]$Matches[1] * 1000000 + [int]$Matches[2] * 1000 + [int]$Matches[3]
+          if ($versionCode -lt 1) { throw 'Android versionCode must be positive' }
+          "APK_VERSION_NAME=$($env:RELEASE_TAG.Substring(1))" >> $env:GITHUB_ENV
+          "APK_VERSION_CODE=$versionCode" >> $env:GITHUB_ENV
+
       - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
+          ref: refs/tags/${{ env.RELEASE_TAG }}
 
       - uses: actions/setup-java@v6.3.0
         with:
@@ -69,12 +87,6 @@ jobs:
           INKBOX_ANDROID_KEYSTORE: ${{ secrets.INKBOX_ANDROID_KEYSTORE }}
           INKBOX_ANDROID_KEYSTORE_PASSWORD: ${{ secrets.INKBOX_ANDROID_KEYSTORE_PASSWORD }}
         run: |
-          if ($env:GITHUB_REF_NAME -notmatch '^v(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$') {
-            throw 'Expected a vMAJOR.MINOR.PATCH tag with up to three digits per component'
-          }
-          $versionName = $env:GITHUB_REF_NAME.Substring(1)
-          $versionCode = [int]$Matches[1] * 1000000 + [int]$Matches[2] * 1000 + [int]$Matches[3]
-          if ($versionCode -lt 1) { throw 'Android versionCode must be positive' }
           if (-not $env:INKBOX_ANDROID_KEYSTORE -or -not $env:INKBOX_ANDROID_KEYSTORE_PASSWORD) {
             throw 'Configure the InkBox Android signing secrets before publishing'
           }
@@ -83,7 +95,7 @@ jobs:
           Remove-Item Env:INKBOX_ANDROID_KEYSTORE
           try {
             flutter build apk --release --no-pub --target-platform android-arm,android-arm64,android-x64 `
-              --build-name $versionName --build-number $versionCode
+              --build-name $env:APK_VERSION_NAME --build-number $env:APK_VERSION_CODE
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
             $apk = 'build/app/outputs/flutter-apk/app-release.apk'
             & "$env:ANDROID_HOME/build-tools/$env:ANDROID_BUILD_TOOLS/apksigner.bat" verify $apk
@@ -96,7 +108,7 @@ jobs:
               }
             }
             New-Item -ItemType Directory -Path "$env:RUNNER_TEMP/release" | Out-Null
-            Copy-Item -LiteralPath $apk -Destination "$env:RUNNER_TEMP/release/InkBox-$env:GITHUB_REF_NAME-android.apk"
+            Copy-Item -LiteralPath $apk -Destination "$env:RUNNER_TEMP/release/InkBox-$env:RELEASE_TAG-android.apk"
           } finally {
             Remove-Item -LiteralPath $env:INKBOX_ANDROID_KEYSTORE_PATH
           }
@@ -125,10 +137,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          apk="release/InkBox-$GITHUB_REF_NAME-android.apk"
-          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" "$apk" --clobber --repo "$GITHUB_REPOSITORY"
+          apk="release/InkBox-$RELEASE_TAG-android.apk"
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$RELEASE_TAG" "$apk" --clobber --repo "$GITHUB_REPOSITORY"
           else
-            gh release create "$GITHUB_REF_NAME" "$apk" --verify-tag --generate-notes \
-              --title "InkBox $GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY"
+            gh release create "$RELEASE_TAG" "$apk" --verify-tag --generate-notes \
+              --title "InkBox $RELEASE_TAG" --repo "$GITHUB_REPOSITORY"
           fi
